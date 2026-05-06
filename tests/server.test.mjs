@@ -16,11 +16,13 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import http from 'node:http';
 
 // _helper.mjs sets env vars and re-exports __test
 import { __test, tmpDir } from './_helper.mjs';
 
-const { state, ingest, snapshot, addItem, updateItem, computeStats, historyAppend, PROTOCOL_VERSION, vcrState, pushReplyTokens } = __test;
+const { state, ingest, snapshot, addItem, updateItem, computeStats, historyAppend, PROTOCOL_VERSION, vcrState, pushReplyTokens, resumeFilePath, listResumeTargets, STATE_DIR, RESUME_FILE } = __test;
 
 // Reset in-memory state before each test so tests are independent.
 beforeEach(() => {
@@ -489,6 +491,184 @@ describe('VCR state object', () => {
 
   it('vcrState.recording is false initially', () => {
     assert.equal(vcrState.recording, false);
+  });
+});
+
+// ---------- per-session resume file routing ----------
+describe('resumeFilePath()', () => {
+  it('returns per-session path when sessionId is provided', () => {
+    const fp = resumeFilePath('abc12345');
+    assert.ok(fp.endsWith('pending_resume_abc12345.json'), `expected per-session path, got: ${fp}`);
+    assert.ok(fp.includes(STATE_DIR), 'path should be inside STATE_DIR');
+  });
+
+  it('returns global fallback when sessionId is null', () => {
+    const fp = resumeFilePath(null);
+    assert.equal(fp, RESUME_FILE, 'should be the global RESUME_FILE');
+  });
+
+  it('returns global fallback when sessionId is empty string', () => {
+    const fp = resumeFilePath('');
+    assert.equal(fp, RESUME_FILE, 'empty string should fall back to global file');
+  });
+});
+
+// ---------- GET /resume-targets ----------
+describe('listResumeTargets()', () => {
+  it('returns empty array when no pending_resume files exist', async () => {
+    // Clean up any leftover files from other tests
+    const entries = fs.readdirSync(STATE_DIR).filter((f) =>
+      f.startsWith('pending_resume') && f.endsWith('.json')
+    );
+    for (const f of entries) {
+      try { fs.unlinkSync(path.join(STATE_DIR, f)); } catch {}
+    }
+    const targets = await listResumeTargets();
+    assert.ok(Array.isArray(targets), 'should return an array');
+    assert.equal(targets.length, 0, 'should be empty when no files exist');
+  });
+
+  it('lists per-session and global resume files', async () => {
+    // Clean up first
+    const entries = fs.readdirSync(STATE_DIR).filter((f) =>
+      f.startsWith('pending_resume') && f.endsWith('.json')
+    );
+    for (const f of entries) {
+      try { fs.unlinkSync(path.join(STATE_DIR, f)); } catch {}
+    }
+
+    // Write a per-session file
+    const sidFile = resumeFilePath('sess-test-1');
+    const sidPayload = {
+      id: 'itm_test1', sessionId: 'sess-test-1', title: 'Session resume',
+      snippet: '', original_payload: '{}', ts: new Date().toISOString(), queuedAt: Date.now(),
+    };
+    await fsp.writeFile(sidFile, JSON.stringify(sidPayload));
+
+    // Write the global fallback file
+    const globalPayload = {
+      id: 'itm_test2', sessionId: null, title: 'Global resume',
+      snippet: '', original_payload: '{}', ts: new Date().toISOString(), queuedAt: Date.now(),
+    };
+    await fsp.writeFile(RESUME_FILE, JSON.stringify(globalPayload));
+
+    const targets = await listResumeTargets();
+    assert.equal(targets.length, 2, `expected 2 targets, got ${targets.length}`);
+
+    const sidTarget = targets.find((t) => t.sessionId === 'sess-test-1');
+    assert.ok(sidTarget, 'should find the per-session target');
+    assert.equal(sidTarget.itemId, 'itm_test1');
+    assert.equal(sidTarget.title, 'Session resume');
+
+    const globalTarget = targets.find((t) => t.sessionId === null);
+    assert.ok(globalTarget, 'should find the global target');
+    assert.equal(globalTarget.itemId, 'itm_test2');
+
+    // Clean up
+    try { fs.unlinkSync(sidFile); } catch {}
+    try { fs.unlinkSync(RESUME_FILE); } catch {}
+  });
+});
+
+// ---------- issue #12: resume payload includes context fields ----------
+describe('resume payload includes context fields', () => {
+  it('/items/:id/resume writes transcript_snapshot, project_name, git_branch, agent_kind', async () => {
+    // Clean up any leftover resume files
+    const entries = fs.readdirSync(STATE_DIR).filter((f) =>
+      f.startsWith('pending_resume') && f.endsWith('.json')
+    );
+    for (const f of entries) {
+      try { fs.unlinkSync(path.join(STATE_DIR, f)); } catch {}
+    }
+
+    // Add an item with all four context fields.
+    const item = ingest({
+      kind: 'ask_user',
+      session_id: 's1-ctx',
+      agent_kind: 'claude-code',
+      transcript_snapshot: 'line1\nline2\nassistant: hello',
+      tool_input: { questions: [{ question: 'Context test?' }] },
+    });
+    // Manually set projectName and gitBranch (they come from the event in future
+    // protocol revisions; for now we patch directly on the in-memory item).
+    item.projectName = 'illo';
+    item.gitBranch = 'main';
+    state.items.set(item.id, item);
+
+    // Exercise the resume route via an in-process HTTP request.
+    // Read the port from the daemon's port file (written at startup with ILLO_SIDEBAR_PORT=0).
+    const portFile = path.join(STATE_DIR, 'daemon.port');
+    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10);
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        { hostname: '127.0.0.1', port, method: 'POST', path: `/items/${item.id}/resume` },
+        (res) => { res.resume(); res.on('end', resolve); }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+    const rFile = resumeFilePath('s1-ctx');
+    const raw = await fsp.readFile(rFile, 'utf8');
+    const parsed = JSON.parse(raw);
+
+    assert.equal(parsed.transcript_snapshot, 'line1\nline2\nassistant: hello', 'transcript_snapshot should be preserved');
+    assert.equal(parsed.project_name, 'illo', 'project_name should be preserved');
+    assert.equal(parsed.git_branch, 'main', 'git_branch should be preserved');
+    assert.equal(parsed.agent_kind, 'claude-code', 'agent_kind should be preserved');
+
+    // Clean up
+    try { fs.unlinkSync(rFile); } catch {}
+  });
+
+  it('/items/:id/reply writes transcript_snapshot, project_name, git_branch, agent_kind', async () => {
+    // Clean up any leftover resume files
+    const entries = fs.readdirSync(STATE_DIR).filter((f) =>
+      f.startsWith('pending_resume') && f.endsWith('.json')
+    );
+    for (const f of entries) {
+      try { fs.unlinkSync(path.join(STATE_DIR, f)); } catch {}
+    }
+
+    const item = ingest({
+      kind: 'ask_user',
+      session_id: 's2-ctx',
+      agent_kind: 'langgraph',
+      transcript_snapshot: 'foo\nassistant: bar',
+      tool_input: { questions: [{ question: 'Reply context test?' }] },
+    });
+    item.projectName = 'my-project';
+    item.gitBranch = 'feature-x';
+    state.items.set(item.id, item);
+
+    const portFile = path.join(STATE_DIR, 'daemon.port');
+    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10);
+    await new Promise((resolve, reject) => {
+      const body = JSON.stringify({ text: 'confirmed' });
+      const req = http.request(
+        {
+          hostname: '127.0.0.1', port, method: 'POST', path: `/items/${item.id}/reply`,
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        },
+        (res) => { res.resume(); res.on('end', resolve); }
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+
+    const rFile = resumeFilePath('s2-ctx');
+    const raw = await fsp.readFile(rFile, 'utf8');
+    const parsed = JSON.parse(raw);
+
+    assert.equal(parsed.transcript_snapshot, 'foo\nassistant: bar', 'transcript_snapshot should be preserved');
+    assert.equal(parsed.project_name, 'my-project', 'project_name should be preserved');
+    assert.equal(parsed.git_branch, 'feature-x', 'git_branch should be preserved');
+    assert.equal(parsed.agent_kind, 'langgraph', 'agent_kind should be preserved');
+    assert.equal(parsed.user_reply_text, 'confirmed', 'user_reply_text should be set');
+
+    // Clean up
+    try { fs.unlinkSync(rFile); } catch {}
   });
 });
 

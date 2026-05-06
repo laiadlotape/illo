@@ -62,6 +62,38 @@ const STATE_FILE = path.join(STATE_DIR, 'state.json');
 const PORT_FILE = path.join(STATE_DIR, 'daemon.port');
 const PID_FILE = path.join(STATE_DIR, 'daemon.pid');
 const RESUME_FILE = path.join(STATE_DIR, 'pending_resume.json');
+
+// Returns the per-session resume file path when sessionId is present,
+// otherwise falls back to the legacy global file for back-compat.
+function resumeFilePath(sessionId) {
+  if (sessionId) return path.join(STATE_DIR, `pending_resume_${sessionId}.json`);
+  return RESUME_FILE;
+}
+
+// Scan STATE_DIR for all pending_resume*.json files and return a list of
+// queued resume targets. Called by GET /resume-targets.
+async function listResumeTargets() {
+  const results = [];
+  try {
+    const entries = await fsp.readdir(STATE_DIR);
+    for (const f of entries) {
+      if (!f.startsWith('pending_resume') || !f.endsWith('.json')) continue;
+      const fp = path.join(STATE_DIR, f);
+      try {
+        const raw = await fsp.readFile(fp, 'utf8');
+        const parsed = JSON.parse(raw);
+        results.push({
+          sessionId: parsed.sessionId || null,
+          itemId: parsed.id || null,
+          title: parsed.title || null,
+          queuedAt: parsed.queuedAt || null,
+          filePath: fp,
+        });
+      } catch { /* skip malformed file */ }
+    }
+  } catch { /* dir read error — return empty */ }
+  return results;
+}
 const HISTORY_JSONL = path.join(STATE_DIR, 'history.jsonl');
 const HISTORY_SQLITE = path.join(STATE_DIR, 'history.sqlite');
 const VCR_DIR = path.join(STATE_DIR, 'vcr');
@@ -814,6 +846,7 @@ const server = http.createServer(async (req, res) => {
           { method: 'GET', path: '/protocol' },
           { method: 'GET', path: '/state' },
           { method: 'GET', path: '/stats' },
+          { method: 'GET', path: '/resume-targets' },
           { method: 'POST', path: '/event' },
           { method: 'POST', path: '/config' },
           { method: 'POST', path: '/config/push' },
@@ -839,6 +872,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/stats' && req.method === 'GET') {
       const days = Number(url.searchParams.get('days') || 7);
       return json(res, 200, computeStats(days));
+    }
+    if (url.pathname === '/resume-targets' && req.method === 'GET') {
+      const targets = await listResumeTargets();
+      return json(res, 200, targets);
     }
     if (url.pathname === '/event' && req.method === 'POST') {
       const body = await readJson(req);
@@ -956,16 +993,23 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && action === 'resume') {
         const it = state.items.get(id);
         if (!it) return json(res, 404, { error: 'not_found' });
+        const rFile = resumeFilePath(it.sessionId);
         const resumePayload = {
           id: it.id,
+          sessionId: it.sessionId || null,
           title: it.title,
           snippet: it.snippet,
           original_payload: JSON.stringify(it.payload || {}),
           ts: new Date().toISOString(),
+          queuedAt: Date.now(),
+          transcript_snapshot: it.transcriptSnapshot || null,
+          project_name:        it.projectName || null,
+          git_branch:          it.gitBranch || null,
+          agent_kind:          it.agentKind || null,
         };
-        await fsp.writeFile(RESUME_FILE, JSON.stringify(resumePayload, null, 2));
+        await fsp.writeFile(rFile, JSON.stringify(resumePayload, null, 2));
         updateItem(id, { focused: true }, 'focused');
-        return json(res, 200, { ok: true, resumeFile: RESUME_FILE });
+        return json(res, 200, { ok: true, resumeFile: rFile });
       }
       if (req.method === 'POST' && action === 'reply') {
         const it = state.items.get(id);
@@ -975,15 +1019,22 @@ const server = http.createServer(async (req, res) => {
         }
         const body = await readJson(req);
         const text = typeof body?.text === 'string' ? body.text : '';
+        const rFile = resumeFilePath(it.sessionId);
         const resumePayload = {
           id: it.id,
+          sessionId: it.sessionId || null,
           title: it.title,
           snippet: it.snippet,
           original_payload: JSON.stringify(it.payload || {}),
           user_reply_text: text,
           ts: new Date().toISOString(),
+          queuedAt: Date.now(),
+          transcript_snapshot: it.transcriptSnapshot || null,
+          project_name:        it.projectName || null,
+          git_branch:          it.gitBranch || null,
+          agent_kind:          it.agentKind || null,
         };
-        await fsp.writeFile(RESUME_FILE, JSON.stringify(resumePayload, null, 2));
+        await fsp.writeFile(rFile, JSON.stringify(resumePayload, null, 2));
         updateItem(
           id,
           {
@@ -996,7 +1047,7 @@ const server = http.createServer(async (req, res) => {
         );
         // If this item had a push reply token, invalidate it (already replied).
         pushReplyTokens.delete(id);
-        return json(res, 200, { ok: true, resumeFile: RESUME_FILE });
+        return json(res, 200, { ok: true, resumeFile: rFile, sessionId: it.sessionId || null });
       }
       if (req.method === 'POST' && action === 'snooze') {
         const it = state.items.get(id);
@@ -1435,4 +1486,8 @@ export const __test = {
   PROTOCOL_VERSION,
   vcrState,
   pushReplyTokens,
+  resumeFilePath,
+  listResumeTargets,
+  STATE_DIR,
+  RESUME_FILE,
 };

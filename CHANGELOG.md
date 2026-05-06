@@ -7,14 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Resume context now includes `transcript_snapshot`, `project_name`, `git_branch`, and `agent_kind` in the `additionalContext` block injected by the `UserPromptSubmit` hook (#12).
+- Sidebar replies now route to a per-session resume file
+  (`pending_resume_<sessionId>.json`) so the correct Claude session consumes
+  the queued reply when multiple sessions are running. Items without a
+  `sessionId` fall back to the legacy global `pending_resume.json` for
+  back-compat (#9).
+
 ### Added
 
-- Enriched item context (project, git branch, cwd) on every Claude Code hook. Every item now carries `cwd`, `projectName`, `gitBranch`, and `gitWorktree` fields populated from the hook payload. The TUI agent-line renders as `<projectName> · <gitBranch> · <agentKind> · <session8>`, omitting any null fields.
+- Enriched item context (project, git branch, cwd) on every Claude Code hook. Every item now carries `cwd`, `projectName`, `gitBranch`, and `gitWorktree` fields populated from the hook payload. The TUI agent-line renders as `<projectName> · <gitBranch> · <agentKind> · <session8>`, omitting any null fields (#6).
 - `cwd`, `project_name`, `git_branch`, `git_worktree` keyword args added to Python and TypeScript SDK `.ask()`, `.notify()`, and `.custom()` methods.
+- `GET /resume-targets` endpoint: lists all currently-queued resume files so
+  the TUI and other clients can surface delivery status.
+- Persistent post-reply toast in the TUI: after a sidebar reply or resume,
+  shows `queued · type anything in session <session8> to deliver` (or the
+  no-session variant) until the user presses any key.
 
 ### Changed
 
-- Notification items now derive a meaningful title from the transcript snapshot when the raw message is a generic string such as "Claude is waiting for your input", "Waiting for your input", or "Claude needs your attention". The original generic title is preserved in `payload.original_title`.
+- Notification items now derive a meaningful title from the transcript snapshot when the raw message is a generic string such as "Claude is waiting for your input", "Waiting for your input", or "Claude needs your attention". The original generic title is preserved in `payload.original_title` (#6).
+
 
 ## [0.2.0] - 2026-05-06
 
