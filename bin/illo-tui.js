@@ -397,11 +397,19 @@ function render() {
       row++;
     }
 
-    // Agent line
+    // Agent line: [projectName · ][branch · ][agentKind · ]session8
     if (row <= maxRow) {
       out.push(moveTo(row, 1) + eraseLine());
       if (isSnoozed) out.push(dim());
-      out.push(`   ${color(C.dim_c)}${agentKind}${sessionSuffix}  ${fmtAge(item.createdAt)}${resetAttrs()}`);
+      const { cols: tuiCols } = termSize();
+      const agentLineParts = [];
+      if (item.projectName) agentLineParts.push(item.projectName);
+      if (item.gitBranch) agentLineParts.push(item.gitBranch);
+      agentLineParts.push(agentKind);
+      if (item.sessionId) agentLineParts.push(item.sessionId.slice(0, 8));
+      const agentLineText = agentLineParts.join(' · ');
+      const agentLineTruncated = truncate(agentLineText, Math.max(10, tuiCols - 6));
+      out.push(`   ${color(C.dim_c)}${agentLineTruncated}  ${fmtAge(item.createdAt)}${resetAttrs()}`);
       row++;
     }
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Enriched item context (project, git branch, cwd) on every Claude Code hook. Every item now carries `cwd`, `projectName`, `gitBranch`, and `gitWorktree` fields populated from the hook payload. The TUI agent-line renders as `<projectName> · <gitBranch> · <agentKind> · <session8>`, omitting any null fields.
+- `cwd`, `project_name`, `git_branch`, `git_worktree` keyword args added to Python and TypeScript SDK `.ask()`, `.notify()`, and `.custom()` methods.
+
+### Changed
+
+- Notification items now derive a meaningful title from the transcript snapshot when the raw message is a generic string such as "Claude is waiting for your input", "Waiting for your input", or "Claude needs your attention". The original generic title is preserved in `payload.original_title`.
+
 ## [0.2.0] - 2026-05-06
 
 ### Added

@@ -47,7 +47,11 @@ Every event is a JSON object with the following fields. All fields except
   "tool_input":      { /* existing — used by ask_user title/snippet derivation */ },
   "message":         "string  (existing — used by notification title)",
   "payload":         { /* arbitrary additional metadata */ },
-  "ts":              "ISO8601  (optional; server fills if absent)"
+  "ts":              "ISO8601  (optional; server fills if absent)",
+  "cwd":             "string  (optional; absolute working directory of the agent process)",
+  "project_name":    "string  (optional; basename of cwd; used for display in the sidebar)",
+  "git_branch":      "string|null  (optional; current git branch in cwd, or null if not in a repo)",
+  "git_worktree":    "string|null  (optional; absolute path of the git worktree root, from git rev-parse --show-toplevel)"
 }
 ```
 
@@ -56,7 +60,7 @@ Every event is a JSON object with the following fields. All fields except
 | `kind` | Behavior |
 |---|---|
 | `ask_user` | Creates an item. Title derived from `tool_input.questions[0].question` (truncated to 80 chars) unless `title` is provided. Snippet lists the options. |
-| `notification` | Creates an item. Title is `message` (truncated to 100 chars) unless `title` is provided. |
+| `notification` | Creates an item. Title is `message` (truncated to 100 chars) unless `title` is provided. If the title is a generic string (see "Smart title derivation for notifications" below), the daemon will attempt to derive a more useful title from `transcript_snapshot`. |
 | `custom` | Creates an item. Title and snippet come from the envelope (`title`, `snippet`); `payload` is preserved verbatim. Use this for any framework-specific event the daemon doesn't natively understand. |
 | `ask_user_answered` | Resolves the most recent unresolved `ask_user` item for the matching `session_id`. Creates no new item. |
 | `user_prompt` | Resolves any unresolved `idle` items in this session. Creates no new item. |
@@ -90,9 +94,29 @@ the `item:add` / `item:update` WS messages:
   "focused":         false,
   "resolved":        false,
   "replied":         false,
-  "resolvedAt":      "number|null"
+  "resolvedAt":      "number|null",
+  "cwd":             "string|null  (absolute working directory of the originating agent process)",
+  "projectName":     "string|null  (basename of cwd)",
+  "gitBranch":       "string|null  (current git branch, or null if not in a repo)",
+  "gitWorktree":     "string|null  (git worktree root path)"
 }
 ```
+
+### Smart title derivation for notifications
+
+When a `notification` item's title matches one of these patterns (case-insensitive substring match):
+
+- `"claude is waiting"`
+- `"waiting for your input"`
+- `"needs your attention"`
+
+…and a non-empty `transcript_snapshot` is present, the daemon derives a more meaningful title:
+
+1. Find the **last line** in the snapshot that starts with `assistant:` (case-insensitive). Strip the prefix and take the first 80 characters.
+2. If no `assistant:` line exists, take the **last non-empty line** of the snapshot, trimmed, first 80 characters.
+3. If the snapshot is empty or yields nothing, keep the original title unchanged.
+
+The original (generic) title is always preserved in `payload.original_title` so consumers can access it.
 
 ---
 

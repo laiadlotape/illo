@@ -230,6 +230,10 @@ function makeItem({
   urgency,
   transcriptSnapshot,
   quickReplyEnabled,
+  cwd,
+  projectName,
+  gitBranch,
+  gitWorktree,
 }) {
   const now = Date.now();
   const id =
@@ -262,7 +266,45 @@ function makeItem({
     replied: false,
     resolvedAt: null,
     pushedAt: null,  // mobile push tracking — null = not yet pushed
+    cwd: (typeof cwd === 'string' && cwd) ? cwd : null,
+    projectName: (typeof projectName === 'string' && projectName) ? projectName : null,
+    gitBranch: (typeof gitBranch === 'string' && gitBranch) ? gitBranch : null,
+    gitWorktree: (typeof gitWorktree === 'string' && gitWorktree) ? gitWorktree : null,
   };
+}
+
+// Generic strings that indicate a vague notification title.
+const GENERIC_TITLE_PATTERNS = [
+  'claude is waiting',
+  'waiting for your input',
+  'needs your attention',
+];
+
+function isGenericTitle(title) {
+  if (!title) return false;
+  const lower = title.toLowerCase();
+  return GENERIC_TITLE_PATTERNS.some((p) => lower.includes(p));
+}
+
+// Derive a better title from a transcript snapshot when the raw title is generic.
+// Returns a non-empty string, or null if nothing useful found.
+function deriveTitleFromSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'string') return null;
+  const lines = snapshot.split('\n');
+  // Prefer last line starting with "assistant:" (case-insensitive).
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (/^assistant:/i.test(line.trimStart())) {
+      const stripped = line.trimStart().replace(/^assistant:\s*/i, '').trim();
+      if (stripped) return stripped.slice(0, 80);
+    }
+  }
+  // Fallback: last non-empty line.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line) return line.slice(0, 80);
+  }
+  return null;
 }
 
 function addItem(item) {
@@ -313,6 +355,10 @@ function envelope(evt) {
     titleOverride: typeof evt.title === 'string' ? evt.title : null,
     snippetOverride: typeof evt.snippet === 'string' ? evt.snippet : null,
     payload: evt.payload || null,
+    cwd: (typeof evt.cwd === 'string' && evt.cwd) ? evt.cwd : null,
+    projectName: (typeof evt.project_name === 'string' && evt.project_name) ? evt.project_name : null,
+    gitBranch: (typeof evt.git_branch === 'string' && evt.git_branch) ? evt.git_branch : null,
+    gitWorktree: (typeof evt.git_worktree === 'string' && evt.git_worktree) ? evt.git_worktree : null,
   };
 }
 
@@ -345,25 +391,48 @@ function ingest(evt) {
           urgency: env.urgency,
           transcriptSnapshot: env.transcriptSnapshot,
           quickReplyEnabled: env.quickReplyEnabled,
+          cwd: env.cwd,
+          projectName: env.projectName,
+          gitBranch: env.gitBranch,
+          gitWorktree: env.gitWorktree,
         })
       );
       break;
     }
     case 'notification': {
-      const derivedTitle = evt.message || 'Claude needs your attention';
+      const rawTitle = evt.message || 'Claude needs your attention';
+      const chosenTitle = env.titleOverride || rawTitle;
+      // For generic titles, try to derive something more useful from the transcript.
+      let finalTitle = chosenTitle.slice(0, 100);
+      let originalTitle = null;
+      if (isGenericTitle(chosenTitle)) {
+        const derived = deriveTitleFromSnapshot(env.transcriptSnapshot);
+        if (derived) {
+          originalTitle = finalTitle;
+          finalTitle = derived;
+        }
+      }
+      const payloadBase = env.payload || { message: evt.message };
+      if (originalTitle !== null) {
+        payloadBase.original_title = originalTitle;
+      }
       createdItem = addItem(
         makeItem({
           kind: 'notification',
           subkind: evt.subkind,
           sessionId: env.sessionId,
-          title: (env.titleOverride || derivedTitle).slice(0, 100),
+          title: finalTitle,
           snippet: env.snippetOverride || '',
-          payload: env.payload || { message: evt.message },
+          payload: payloadBase,
           agentId: env.agentId,
           agentKind: env.agentKind,
           urgency: env.urgency,
           transcriptSnapshot: env.transcriptSnapshot,
           quickReplyEnabled: env.quickReplyEnabled,
+          cwd: env.cwd,
+          projectName: env.projectName,
+          gitBranch: env.gitBranch,
+          gitWorktree: env.gitWorktree,
         })
       );
       break;

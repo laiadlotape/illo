@@ -267,12 +267,18 @@
     $badge.textContent = urg;
     $badge.classList.add('urgency-' + urg);
 
-    // agent identity line
+    // agent identity line: [projectName · ][branch · ][agentKind · ]session8
     const $agentLine = node.querySelector('.agent-line');
-    if (item.agentKind) {
-      const sid = item.sessionId ? item.sessionId.slice(0, 8) : null;
-      $agentLine.textContent = item.agentKind + (sid ? ' · ' + sid : '');
-      $agentLine.style.display = '';
+    {
+      const parts = [];
+      if (item.projectName) parts.push(item.projectName);
+      if (item.gitBranch) parts.push(item.gitBranch);
+      if (item.agentKind) parts.push(item.agentKind);
+      if (item.sessionId) parts.push(item.sessionId.slice(0, 8));
+      if (parts.length > 0) {
+        $agentLine.textContent = parts.join(' · ');
+        $agentLine.style.display = '';
+      }
     }
 
     // transcript snapshot

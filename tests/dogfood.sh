@@ -294,5 +294,43 @@ VCR_ERR_MSG="$(echo "$VCR_STOP_ERR" | jq -r '.error // "none"')"
 [[ "$VCR_ERR_MSG" != "none" ]] || fail "/vcr/record/stop when not recording should return error"
 echo "  /vcr/record/stop when not recording returns error  ok"
 
+# ---------- enriched fields (issue #6): generic title derived from transcript ----------
+ENRICH_RESP="$(post_json /event '{
+  "kind": "notification",
+  "session_id": "enrich-sess",
+  "message": "Claude is waiting for your input",
+  "transcript_snapshot": "user: do the thing\nassistant: I need you to confirm before proceeding with the migration."
+}')"
+ENRICH_ITEM_ID="$(echo "$ENRICH_RESP" | jq -r '.item.id // ""')"
+[[ -n "$ENRICH_ITEM_ID" && "$ENRICH_ITEM_ID" != "null" ]] || fail "enriched notification did not return an item id"
+
+ENRICH_TITLE="$(get_json /state | jq -r --arg id "$ENRICH_ITEM_ID" '.items[] | select(.id == $id) | .title')"
+[[ "$ENRICH_TITLE" == *"I need you to confirm"* ]] || fail "enriched notification title should be derived from assistant line, got: '$ENRICH_TITLE'"
+echo "  enriched notification: generic title replaced by assistant transcript line  ok"
+
+# Verify original_title is preserved in payload.
+ENRICH_ORIG_TITLE="$(get_json /state | jq -r --arg id "$ENRICH_ITEM_ID" '.items[] | select(.id == $id) | .payload.original_title')"
+assert_eq "enriched notification original_title in payload" "$ENRICH_ORIG_TITLE" "Claude is waiting for your input"
+echo "  enriched notification: original_title preserved in payload  ok"
+
+# Verify enriched fields pass through for ask_user with cwd/project_name/git_branch.
+ENRICH_ASK_RESP="$(post_json /event '{
+  "kind": "ask_user",
+  "session_id": "enrich-ask-sess",
+  "cwd": "/home/user/projects/testapp",
+  "project_name": "testapp",
+  "git_branch": "fix/6-test",
+  "git_worktree": "/home/user/projects/testapp",
+  "tool_input": {"questions": [{"question": "Confirm enriched?"}]}
+}')"
+ENRICH_ASK_ID="$(echo "$ENRICH_ASK_RESP" | jq -r '.item.id // ""')"
+[[ -n "$ENRICH_ASK_ID" && "$ENRICH_ASK_ID" != "null" ]] || fail "enriched ask_user did not return an item id"
+
+ENRICH_ASK_PROJ="$(get_json /state | jq -r --arg id "$ENRICH_ASK_ID" '.items[] | select(.id == $id) | .projectName')"
+assert_eq "enriched ask_user projectName" "$ENRICH_ASK_PROJ" "testapp"
+ENRICH_ASK_BRANCH="$(get_json /state | jq -r --arg id "$ENRICH_ASK_ID" '.items[] | select(.id == $id) | .gitBranch')"
+assert_eq "enriched ask_user gitBranch" "$ENRICH_ASK_BRANCH" "fix/6-test"
+echo "  enriched ask_user: cwd/projectName/gitBranch pass through  ok"
+
 echo ""
 echo "DOGFOOD OK"
