@@ -1,4 +1,4 @@
-# illo-sidebar — v0.2 — generic agent inbox
+# illo-sidebar — deliberate-prompting workbench for Claude Code (and any HITL agent)
 
 ![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.2.0-f7b955)
 
@@ -49,40 +49,79 @@ events to it over a simple HTTP JSON protocol.
 
 ## How it works
 
+illo is built around the principle from [FindingMemo](https://github.com/lotape6/FindingMemo/blob/master/lessons/00-introduction/deck.md):
+
+> **Never prompt directly in chat.** Write in an editor, read it twice, dehumanize it. You are configuring a system, not chatting with a colleague.
+
+Two tmux panes side by side: the Claude session on the left, illo on the right. illo is your **prompt notepad** plus a live event log of what Claude has been doing. You compose your prompt deliberately in illo's editor, press a hotkey to inject it into the Claude pane (via `tmux send-keys`) and focus that pane — illo does **not** auto-press Enter, so you read the prompt once more in its destination before committing.
+
+```
+┌─────────────────────────────┬────────────────────────────────────────┐
+│                             │ illo · pane: claude(%4)         ●      │  status bar
+│  Claude session             ├────────────────────────────────────────┤
+│  (claude CLI in tmux pane)  │ events  · [v] verbose  · [x] clear     │  event log
+│                             │   12:30 · ask_user · "Drop users_old?" │  (questions /
+│  > _ (cursor here after     │   12:31 · sent     · "Drop it. Backup" │   notifications /
+│      illo sends)            │   12:33 · stop     · waiting…          │   sent prompts)
+│                             ├────────────────────────────────────────┤
+│                             │ ┌─ compose ──── lines: 4 · words: 23 ─┐│  multi-line editor
+│                             │ │ Claude, after looking at the script,│ │  arrows / Home / End
+│                             │ │   1. Verify backup at /backups/…    │ │  Backspace / Ctrl-W
+│                             │ │   2. Run rollback if mismatch█      │ │  Ctrl-Z undo (2s groups)
+│                             │ └─────────────────────────────────────┘ │  Ctrl-E → $EDITOR
+│                             │ Ctrl-S send · Ctrl-D send+Enter · …    │  hotkey hint
+└─────────────────────────────┴────────────────────────────────────────┘
+```
+
+### The send loop (deliberate prompting)
+
+```
+You compose in illo's editor (free editing, undo, $EDITOR escape)
+                │
+                │   Ctrl-S
+                v
+  bin/tmux-send.sh  →  tmux send-keys -l <text>      (literal mode, no Enter)
+                                  +
+                       tmux select-pane              (focus jumps to Claude pane)
+                │
+                │   you read the prompt one more time in its destination
+                │   you press Enter yourself
+                v
+  Claude receives the prompt and starts working
+                │
+                │   AskUserQuestion / Notification / tool calls fire hooks
+                v
+  hooks → POST /event → daemon → broadcast → illo event log refreshes
+                │
+                │   you watch the timeline build up; pick the next prompt
+                v
+  back to compose (Ctrl-R re-loads the last sent prompt for refinement)
+```
+
+### Event capture (the v0.2 plumbing, unchanged)
+
+Every event Claude (or any other agent framework) generates flows through the daemon and lands in the event log:
+
 ```
 Any agent framework
   Claude Code / LangGraph / CrewAI / Codex / Aider / Cursor / custom script
-           |
-           |  POST /event  (v0.2 envelope — any kind, any agent_kind)
+           │
+           │  POST /event   (envelope: kind, agent_kind, urgency,
+           │                 transcript_snapshot, project / git_branch / cwd, …)
            v
-  daemon/server.js  (Node 20+, stdlib only, 127.0.0.1:7821)
-           |
-           |  normalise event → item  (urgency, agentKind, transcriptSnapshot,
-           |  quickReplyEnabled, snoozedUntil, replied, ...)
-           |  persist to state.json + history (sqlite or JSONL)
-           |  broadcast via WebSocket
+  daemon/server.js   (Node 20+, stdlib only, 127.0.0.1:7821)
+           │
+           │  normalise → persist (state.json + sqlite or JSONL history)
+           │  broadcast via WebSocket
            v
-  ui/  (vanilla HTML/JS served by daemon on same port)
-           |
-           |  WebSocket  item:add / item:warn / item:update / item:remove
-           v
-  sidebar (TUI in tmux split via /sb, or /sb-web for browser fallback)
-           |
-           |  click actions:  quick-reply / snooze / resume / acknowledge
-           v
-  POST /items/:id/reply   → daemon writes pending_resume.json with user_reply_text
-  POST /items/:id/snooze  → daemon sets snoozedUntil, broadcasts item:update
-  POST /items/:id/resume  → daemon writes pending_resume.json (no text)
-           |
-           |  (user types any prompt in the Claude CLI)
-           v
-  bin/on-user-prompt.sh  (UserPromptSubmit hook)
-           |
-           |  reads + deletes pending_resume.json
-           |  emits hookSpecificOutput.additionalContext
-           v
-  Claude receives original question context injected into the turn
+  illo TUI event log   ←   browser fallback /sb-web (optional)
 ```
+
+### Resume / quick-reply (still available, secondary to the editor)
+
+If a captured `ask_user` or `notification` arrived while you were doing something else, you can answer it from inside illo without composing a fresh prompt: select the event in the log, press `r` to inject a one-line reply via `/items/:id/reply`. The daemon writes `pending_resume_<sessionId>.json`; the next `UserPromptSubmit` hook in that Claude session injects the original question's context — you don't have to retype it.
+
+This path is optimised for short corrective replies. The default workflow is **compose deliberately in the editor, send via Ctrl-S, watch the response land in the event log.**
 
 ---
 
