@@ -1,0 +1,17 @@
+{
+  "name": "illo-sidebar-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node --test server.test.mjs",
+    "test:dogfood": "bash dogfood.sh",
+    "test:ux": "playwright test ux.spec.js",
+    "test:sdk-python": "bash sdk_python.test.sh",
+    "test:integration": "bash integration.test.sh",
+    "test:tui": "bash tui.test.sh",
+    "test:all": "npm run test:unit && npm run test:dogfood && npm run test:sdk-python && npm run test:integration && npm run test:tui && npm run test:ux"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
