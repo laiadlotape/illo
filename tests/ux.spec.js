@@ -272,8 +272,9 @@ test('click "resume here" shows hint text and writes pending_resume.json', async
   // an item:update WS message may cause the node to be recreated
   await expect(page.locator('#list')).toContainText('Resume queued', { timeout: 3000 });
 
-  // pending_resume.json should exist in the daemon's state dir
-  expect(existsSync(path.join(stateDir, 'pending_resume.json'))).toBe(true);
+  // After PR #14 the resume file is per-session: pending_resume_<sessionId>.json.
+  // The legacy global pending_resume.json is only used when the item has no sessionId.
+  expect(existsSync(path.join(stateDir, 'pending_resume_resume-test.json'))).toBe(true);
 });
 
 test('click "box" button switches to data-mode="box" and box shows count', async ({ page }) => {
@@ -543,9 +544,10 @@ test('v0.2 quick reply — type and Cmd+Enter sends reply; daemon replied=true; 
   }
   expect(replied).toBe(true);
 
-  // UI should show the [replied] indicator — look in entire page (item node may have been recreated)
+  // After PR #14 the .replied-pill renders the queued-delivery hint instead of `[replied]`.
+  // It now reads e.g. "queued · type in session reply-ux to deliver yes please".
   await expect(page.locator('.replied-pill').first()).toBeVisible({ timeout: 3000 });
-  await expect(page.locator('.replied-pill').first()).toContainText('[replied]');
+  await expect(page.locator('.replied-pill').first()).toContainText('queued · type in session');
 });
 
 test('v0.2 filter chips — urgency filter shows only urgent item', async ({ page }) => {

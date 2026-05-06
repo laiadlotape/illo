@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - TUI event-detail popup: long lines now wrap at the popup width with 2-col inner margins; popup uses ~80% × ~60% of the terminal with a Unicode border and subtle drop shadow; content is scrollable with Up/Down and PgUp/PgDn (#31).
+- `tests/ux.spec.js`: two assertions stale after PR #14's per-session resume routing. The "resume here" test now checks `pending_resume_<sessionId>.json` (was `pending_resume.json`); the quick-reply test now expects the `queued · type in session` hint (was `[replied]`) (#38).
 
 
 ## [0.3.0] - 2026-05-06
