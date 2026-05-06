@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit-and-dogfood:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: node --version
+      - run: cd tests && npm ci
+      - run: npm run test:unit
+        working-directory: tests
+      - run: npm run test:dogfood
+        working-directory: tests
+      - run: npm run test:tui
+        working-directory: tests
+      - run: npm run test:integration
+        working-directory: tests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: npm run test:sdk-python
+        working-directory: tests
+
+  ux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+      - run: cd tests && npm ci
+      - run: npx playwright install --with-deps chromium
+        working-directory: tests
+      - run: npm run test:ux
+        working-directory: tests
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: tests/playwright-report
+
+  plugin-validate:
+    # TODO: install the claude CLI here and run `claude plugin validate .`
+    # No installation recipe is available yet.
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
