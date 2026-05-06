@@ -1,21 +1,40 @@
 #!/usr/bin/env node
-// illo-tui — CLI-native TUI sidebar for illo-sidebar daemon.
-// Zero npm deps. Pure Node.js stdlib + ANSI escape codes.
-// Connects to the daemon via WebSocket (RFC 6455, hand-rolled), renders a
-// full-screen list of pending items in the alternate screen buffer.
+// illo-tui — v0.3 prompt-notepad sidebar.
+//
+// A composition surface that lives in a tmux split next to the Claude pane.
+// You write, edit, review, then hand the prompt off to the Claude pane via
+// tmux send-keys. Crucially: we never auto-press Enter — the human reads once
+// more in the destination pane and submits themselves.
+//
+// Architecture: events log (top ~1/3) tails the daemon's item stream (low-noise
+// filter by default). Compose pane (lower ~2/3) is an in-house editor with a
+// $EDITOR escape (Ctrl-E). Hand-off via Ctrl-S (review-and-submit) or Ctrl-D
+// (send + Enter).
+//
+// Zero npm deps. Pure Node stdlib + ANSI escapes. Hand-rolled WebSocket
+// client (RFC 6455). Hand-rolled keyboard parser. Hand-rolled editor.
 //
 // Usage:
 //   node bin/illo-tui.js           # normal TUI mode
-//   node bin/illo-tui.js --no-tty  # headless smoke-test mode (print snapshot + exit on EOF)
+//   node bin/illo-tui.js --no-tty  # headless smoke-test mode
 
 import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
 // ─── args ────────────────────────────────────────────────────────────────────
 const NO_TTY = process.argv.includes('--no-tty');
+
+// ─── plugin root + tmux helper ───────────────────────────────────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PLUGIN_ROOT = path.resolve(__dirname, '..');
+const TMUX_SEND = path.join(PLUGIN_ROOT, 'bin', 'tmux-send.sh');
 
 // ─── port discovery ──────────────────────────────────────────────────────────
 function discoverPort() {
@@ -45,20 +64,29 @@ function bold()         { return `${CSI}1m`; }
 function dim()          { return `${CSI}2m`; }
 function reverse()      { return `${CSI}7m`; }
 function color(n)       { return `${CSI}38;5;${n}m`; }
-function bgColor(n)     { return `${CSI}48;5;${n}m`; }
 function eraseLine()    { return `${CSI}2K`; }
 
 // Palette
 const C = {
-  amber:   214,  // normal urgency accent
-  red:     203,  // urgent
-  gray:    245,  // low urgency
-  green:   114,  // connected / ok
-  dim_c:   240,  // muted text
-  white:   255,  // foreground
-  blue:    111,  // reply prompt
-  yellow:  227,  // snooze overlay
+  amber:   214,
+  red:     203,
+  gray:    245,
+  green:   114,
+  dim_c:   240,
+  white:   255,
+  blue:    111,
+  yellow:  227,
+  cyan:    109,
 };
+
+function kindColor(kind) {
+  if (kind === 'ask_user')     return C.amber;
+  if (kind === 'notification') return C.cyan;
+  if (kind === 'sent')         return C.green;
+  if (kind === 'stop')         return C.gray;
+  if (kind === 'custom')       return C.blue;
+  return C.dim_c;
+}
 
 function urgencyColor(urgency) {
   if (urgency === 'urgent') return C.red;
@@ -70,19 +98,13 @@ function truncate(str, width) {
   if (!str) return '';
   const s = String(str);
   if (s.length <= width) return s;
+  if (width <= 1) return s.slice(0, Math.max(0, width));
   return s.slice(0, width - 1) + '…';
 }
 
 function pad(str, width) {
   const s = String(str);
   return s.length >= width ? s.slice(0, width) : s + ' '.repeat(width - s.length);
-}
-
-function urgencyBadge(urgency) {
-  // Padded to width 8: "[urgent ]", "[normal ]", "[low    ]"
-  const label = urgency === 'urgent' ? 'urgent ' :
-                urgency === 'low'    ? 'low    ' : 'normal ';
-  return `[${label}]`;
 }
 
 // ─── terminal size ────────────────────────────────────────────────────────────
@@ -94,41 +116,13 @@ function termSize() {
   }
 }
 
-// ─── WebSocket client (RFC 6455, hand-rolled, MASKED client frames) ──────────
+// ─── WebSocket client (RFC 6455, hand-rolled) ────────────────────────────────
 function wsHandshakeKey() {
   const bytes = new Uint8Array(16);
   for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
   return Buffer.from(bytes).toString('base64');
 }
 
-function wsClientEncode(str) {
-  // Client→server frames MUST be masked per RFC 6455.
-  const payload = Buffer.from(str, 'utf8');
-  const mask = Buffer.alloc(4);
-  for (let i = 0; i < 4; i++) mask[i] = Math.floor(Math.random() * 256);
-  const len = payload.length;
-  let header;
-  if (len < 126) {
-    header = Buffer.alloc(2);
-    header[0] = 0x81; // FIN + text
-    header[1] = 0x80 | len; // MASK bit set
-  } else if (len < 65536) {
-    header = Buffer.alloc(4);
-    header[0] = 0x81;
-    header[1] = 0x80 | 126;
-    header.writeUInt16BE(len, 2);
-  } else {
-    header = Buffer.alloc(10);
-    header[0] = 0x81;
-    header[1] = 0x80 | 127;
-    header.writeBigUInt64BE(BigInt(len), 2);
-  }
-  const masked = Buffer.alloc(len);
-  for (let i = 0; i < len; i++) masked[i] = payload[i] ^ mask[i % 4];
-  return Buffer.concat([header, mask, masked]);
-}
-
-// Server→client frames are NOT masked; re-use the server's decode logic.
 function wsServerDecode(buf) {
   if (buf.length < 2) return null;
   const opcode = buf[0] & 0x0f;
@@ -141,14 +135,14 @@ function wsServerDecode(buf) {
   else if (len === 127) { len = Number(buf.readBigUInt64BE(2)); offset = 10; }
   let maskBytes = null;
   if (masked) { maskBytes = buf.slice(offset, offset + 4); offset += 4; }
-  if (buf.length < offset + len) return null; // incomplete frame
+  if (buf.length < offset + len) return null;
   const data = Buffer.from(buf.slice(offset, offset + len));
   if (maskBytes) for (let i = 0; i < data.length; i++) data[i] ^= maskBytes[i % 4];
   const consumed = offset + len;
   return { text: data.toString('utf8'), consumed };
 }
 
-// ─── HTTP helper ──────────────────────────────────────────────────────────────
+// ─── HTTP helpers ─────────────────────────────────────────────────────────────
 function httpGet(port, path) {
   return new Promise((resolve, reject) => {
     const req = http.get(`http://127.0.0.1:${port}${path}`, (res) => {
@@ -186,76 +180,293 @@ function httpPost(port, path, body) {
   });
 }
 
-function httpDelete(port, path) {
-  return new Promise((resolve, reject) => {
-    const options = { hostname: '127.0.0.1', port, path, method: 'DELETE' };
-    const req = http.request(options, (res) => {
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve());
-    });
-    req.on('error', reject);
-    req.setTimeout(5000, () => req.destroy(new Error('timeout')));
-    req.end();
-  });
-}
-
 // ─── Application state ────────────────────────────────────────────────────────
 const appState = {
-  items: [],          // all items from daemon
+  paneId: null,
+  paneOverride: null,    // last seen daemon override
+  events: [],            // all items from daemon
   config: {},
   connected: false,
-  selectedIdx: 0,     // index into filteredItems()
-  filter: {
-    mode: 'pending',  // 'pending' | 'all' | 'snoozed'
-    agent: '',
-    urgency: '',
-    kind: '',
-  },
-  expandedContext: new Set(), // item ids with context expanded
-  contextScroll: new Map(),   // item id → scroll offset in transcript
-  boxMode: false,
-  // overlay state
-  overlay: null,  // null | { type: 'reply', text: '' } | { type: 'snooze' } | { type: 'filter' }
-  replyText: '',
-  // toast
-  toast: null,    // { text, expiresAt }
-  // warn flash
-  warnFlash: new Map(), // id → { until, phase }
-  // reconnect
   reconnecting: false,
-  reconnectAttempts: 0,
+
+  view: {
+    eventScroll: 0,
+    eventFilter: 'low-noise',  // 'low-noise' | 'verbose'
+    focus: 'compose',          // 'compose' | 'events'
+  },
+
+  compose: {
+    lines: [''],
+    cur: { row: 0, col: 0 },
+    visibleRowOffset: 0,
+    colOffset: 0,
+    dirty: false,
+    undoStack: [],
+    redoStack: [],
+    lastEditTs: 0,
+    typingGroupOpen: false,
+  },
+
+  toast: null,    // { text, expiresAt }
+  modal: null,    // { type:'event-detail', eventId } | { type:'message', text }
 };
 
-function filteredItems() {
+// ─── compose helpers ──────────────────────────────────────────────────────────
+function composeText() {
+  return appState.compose.lines.join('\n');
+}
+
+function composeWordCount() {
+  const txt = composeText().trim();
+  if (!txt) return 0;
+  return txt.split(/\s+/).length;
+}
+
+function clampCursor() {
+  const c = appState.compose;
+  if (c.cur.row < 0) c.cur.row = 0;
+  if (c.cur.row >= c.lines.length) c.cur.row = c.lines.length - 1;
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col < 0) c.cur.col = 0;
+  if (c.cur.col > line.length) c.cur.col = line.length;
+}
+
+function snapshotCompose() {
+  return {
+    lines: appState.compose.lines.slice(),
+    cur: { row: appState.compose.cur.row, col: appState.compose.cur.col },
+  };
+}
+
+function pushUndo(force = false) {
+  const c = appState.compose;
   const now = Date.now();
-  const { mode, agent, urgency, kind } = appState.filter;
-  return appState.items.filter((it) => {
-    if (mode === 'pending') {
-      if (it.resolved) return false;
-      if (it.snoozedUntil && it.snoozedUntil > now) return false;
-    } else if (mode === 'snoozed') {
-      if (!(it.snoozedUntil && it.snoozedUntil > now)) return false;
+  // Within the typing-group window AND not forced → don't push another snapshot.
+  if (!force && c.typingGroupOpen && now - c.lastEditTs < 2000) {
+    c.lastEditTs = now;
+    return;
+  }
+  c.undoStack.push(snapshotCompose());
+  while (c.undoStack.length > 100) c.undoStack.shift();
+  c.redoStack.length = 0;
+  c.typingGroupOpen = !force;
+  c.lastEditTs = now;
+}
+
+function endUndoGroup() {
+  appState.compose.typingGroupOpen = false;
+}
+
+function applySnapshot(snap) {
+  appState.compose.lines = snap.lines.slice();
+  appState.compose.cur = { row: snap.cur.row, col: snap.cur.col };
+  clampCursor();
+}
+
+function undo() {
+  const c = appState.compose;
+  if (c.undoStack.length === 0) {
+    showToast('(nothing to undo)');
+    return;
+  }
+  c.redoStack.push(snapshotCompose());
+  applySnapshot(c.undoStack.pop());
+  c.dirty = composeText().length > 0;
+  c.typingGroupOpen = false;
+}
+
+function redo() {
+  const c = appState.compose;
+  if (c.redoStack.length === 0) {
+    showToast('(nothing to redo)');
+    return;
+  }
+  c.undoStack.push(snapshotCompose());
+  applySnapshot(c.redoStack.pop());
+  c.dirty = composeText().length > 0;
+  c.typingGroupOpen = false;
+}
+
+function markDirty() {
+  appState.compose.dirty = composeText().length > 0;
+}
+
+function clearCompose() {
+  pushUndo(true);
+  appState.compose.lines = [''];
+  appState.compose.cur = { row: 0, col: 0 };
+  appState.compose.visibleRowOffset = 0;
+  appState.compose.colOffset = 0;
+  appState.compose.dirty = false;
+  endUndoGroup();
+}
+
+// ─── editor: text mutations ───────────────────────────────────────────────────
+function insertChar(ch) {
+  pushUndo(false);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  c.lines[c.cur.row] = line.slice(0, c.cur.col) + ch + line.slice(c.cur.col);
+  c.cur.col += ch.length;
+  markDirty();
+}
+
+function insertNewline() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  const left = line.slice(0, c.cur.col);
+  const right = line.slice(c.cur.col);
+  // Auto-indent: copy leading whitespace of the current line
+  const indent = (left.match(/^[ \t]*/) || [''])[0];
+  c.lines.splice(c.cur.row, 1, left, indent + right);
+  c.cur.row += 1;
+  c.cur.col = indent.length;
+  markDirty();
+}
+
+function backspaceChar() {
+  const c = appState.compose;
+  if (c.cur.col === 0 && c.cur.row === 0) return;
+  pushUndo(false);
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col > 0) {
+    c.lines[c.cur.row] = line.slice(0, c.cur.col - 1) + line.slice(c.cur.col);
+    c.cur.col -= 1;
+  } else {
+    // Join with previous line
+    const prev = c.lines[c.cur.row - 1] || '';
+    const newCol = prev.length;
+    c.lines[c.cur.row - 1] = prev + line;
+    c.lines.splice(c.cur.row, 1);
+    c.cur.row -= 1;
+    c.cur.col = newCol;
+  }
+  markDirty();
+}
+
+function deleteChar() {
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  const last = c.cur.row === c.lines.length - 1;
+  if (c.cur.col === line.length && last) return;
+  pushUndo(false);
+  if (c.cur.col < line.length) {
+    c.lines[c.cur.row] = line.slice(0, c.cur.col) + line.slice(c.cur.col + 1);
+  } else {
+    // Join next line
+    const next = c.lines[c.cur.row + 1] || '';
+    c.lines[c.cur.row] = line + next;
+    c.lines.splice(c.cur.row + 1, 1);
+  }
+  markDirty();
+}
+
+function killToEol() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col >= line.length) {
+    // At EOL — join next
+    if (c.cur.row < c.lines.length - 1) {
+      c.lines[c.cur.row] = line + (c.lines[c.cur.row + 1] || '');
+      c.lines.splice(c.cur.row + 1, 1);
     }
-    // focused items not shown in pending
-    if (mode === 'pending' && it.focused && it.resolved) return false;
-    if (agent && it.agentKind !== agent) return false;
-    if (urgency && it.urgency !== urgency) return false;
-    if (kind && it.kind !== kind) return false;
-    return true;
-  });
+  } else {
+    c.lines[c.cur.row] = line.slice(0, c.cur.col);
+  }
+  markDirty();
+  endUndoGroup();
 }
 
-function selectedItem() {
-  const items = filteredItems();
-  const idx = Math.min(appState.selectedIdx, items.length - 1);
-  return idx >= 0 ? items[idx] : null;
+function killLineBackward() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  c.lines[c.cur.row] = line.slice(c.cur.col);
+  c.cur.col = 0;
+  markDirty();
+  endUndoGroup();
 }
 
-// ─── Rendering ────────────────────────────────────────────────────────────────
+function deleteWordBackward() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col === 0) {
+    // Same as backspace — join with prev line
+    backspaceChar();
+    endUndoGroup();
+    return;
+  }
+  let i = c.cur.col;
+  // Skip whitespace backward
+  while (i > 0 && /\s/.test(line[i - 1])) i--;
+  // Then skip word chars
+  while (i > 0 && !/\s/.test(line[i - 1])) i--;
+  c.lines[c.cur.row] = line.slice(0, i) + line.slice(c.cur.col);
+  c.cur.col = i;
+  markDirty();
+  endUndoGroup();
+}
+
+// ─── editor: cursor movement ──────────────────────────────────────────────────
+function cursorLeft() {
+  endUndoGroup();
+  const c = appState.compose;
+  if (c.cur.col > 0) c.cur.col -= 1;
+  else if (c.cur.row > 0) {
+    c.cur.row -= 1;
+    c.cur.col = (c.lines[c.cur.row] || '').length;
+  }
+}
+
+function cursorRight() {
+  endUndoGroup();
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col < line.length) c.cur.col += 1;
+  else if (c.cur.row < c.lines.length - 1) {
+    c.cur.row += 1;
+    c.cur.col = 0;
+  }
+}
+
+function cursorUp() {
+  endUndoGroup();
+  const c = appState.compose;
+  if (c.cur.row > 0) {
+    c.cur.row -= 1;
+    const line = c.lines[c.cur.row] || '';
+    if (c.cur.col > line.length) c.cur.col = line.length;
+  }
+}
+
+function cursorDown() {
+  endUndoGroup();
+  const c = appState.compose;
+  if (c.cur.row < c.lines.length - 1) {
+    c.cur.row += 1;
+    const line = c.lines[c.cur.row] || '';
+    if (c.cur.col > line.length) c.cur.col = line.length;
+  }
+}
+
+function cursorHome() {
+  endUndoGroup();
+  appState.compose.cur.col = 0;
+}
+
+function cursorEnd() {
+  endUndoGroup();
+  const c = appState.compose;
+  c.cur.col = (c.lines[c.cur.row] || '').length;
+}
+
+// ─── render ───────────────────────────────────────────────────────────────────
 let lastRenderTime = 0;
 let renderScheduled = false;
-const RENDER_INTERVAL_MS = Math.floor(1000 / 30); // 30fps cap
+const RENDER_INTERVAL_MS = Math.floor(1000 / 30);
 
 function scheduleRender() {
   if (NO_TTY) { renderNoTty(); return; }
@@ -270,281 +481,279 @@ function scheduleRender() {
   }, wait);
 }
 
-function fmtAge(ts) {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 60) return s + 's';
-  if (s < 3600) return Math.floor(s / 60) + 'm';
-  return Math.floor(s / 3600) + 'h';
+function fmtHHMM(ts) {
+  const d = new Date(ts);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
 }
 
-function fmtSnoozeRemaining(until) {
-  const s = Math.max(0, Math.floor((until - Date.now()) / 1000));
-  if (s <= 0) return null;
-  if (s < 60) return s + 's';
-  if (s < 3600) return Math.floor(s / 60) + 'm';
-  return Math.floor(s / 3600) + 'h';
+function eventTitle(ev) {
+  // Use the daemon's normalized title; for sent items prefer payload.text first line.
+  if (ev.kind === 'sent' && ev.payload?.text) {
+    return (ev.payload.text.split('\n')[0] || '(empty)').trim();
+  }
+  return ev.title || '';
+}
+
+function visibleEvents() {
+  const all = appState.events.slice();
+  if (appState.view.eventFilter === 'verbose') return all;
+  // low-noise: ask_user, notification, sent
+  return all.filter((ev) => ['ask_user', 'notification', 'sent'].includes(ev.kind));
 }
 
 function render() {
   if (!process.stdout.isTTY && !NO_TTY) return;
   const { rows, cols } = termSize();
-  const items = filteredItems();
-  const selIdx = Math.min(appState.selectedIdx, Math.max(0, items.length - 1));
   const out = [];
 
-  // Box mode: single-line summary
-  if (appState.boxMode) {
-    const pending = appState.items.filter((it) => !it.resolved);
-    const urgent = pending.filter((it) => it.urgency === 'urgent').length;
-    const normal = pending.filter((it) => it.urgency === 'normal').length;
-    const low    = pending.filter((it) => it.urgency === 'low').length;
-    const dot = appState.connected ?
-      `${color(C.green)}●${resetAttrs()}` : `${color(C.red)}●${resetAttrs()}`;
-    const summary = `illo · ${pending.length} pending [urgent×${urgent} normal×${normal} low×${low}] ${dot}`;
-    out.push(moveTo(1, 1) + eraseLine() + summary);
-    out.push(moveTo(2, 1) + eraseLine() + dim() + color(C.dim_c) + 'Press any key to return to full mode' + resetAttrs());
-    process.stdout.write(out.join(''));
-    return;
-  }
-
-  // Full mode
-  // Status bar (row 1)
-  const pendingCount = appState.items.filter((it) => !it.resolved).length;
-  const connDot = appState.connected ?
-    `${color(C.green)}●${resetAttrs()}` : `${color(C.red)}●${resetAttrs()}`;
-  const filterDesc = [
-    appState.filter.agent   ? `agent:${appState.filter.agent}` : 'agent:any',
-    appState.filter.urgency ? `urgency:${appState.filter.urgency}` : '',
-  ].filter(Boolean).join('  ');
-  const reconnMsg = appState.reconnecting ? `${color(C.red)} [reconnecting…]${resetAttrs()}` : '';
-  const statusText = `illo · pending [${pendingCount}]  ${filterDesc}${reconnMsg}`;
-  const statusLine = truncate(statusText.replace(/\x1b\[[^m]*m/g, ''), cols - 4);
+  // ── status bar (row 1) ──────────────────────────────────────────────────
+  const paneStr = appState.paneId
+    ? `pane: ${appState.paneId}`
+    : 'pane: <none — /sb-attach to set>';
+  const focusStr = appState.view.focus === 'events' ? 'focus: events' : 'focus: compose';
+  const dot = appState.connected
+    ? `${color(C.green)}●${resetAttrs()}`
+    : `${color(C.red)}●${resetAttrs()}`;
+  const reconn = appState.reconnecting ? `${color(C.red)} [reconnecting…]${resetAttrs()}` : '';
 
   out.push(moveTo(1, 1) + eraseLine());
   out.push(bold() + color(C.amber) + ' illo' + resetAttrs());
-  out.push(color(C.dim_c) + ` · pending [` + resetAttrs() + bold() + `${pendingCount}` + resetAttrs());
-  out.push(color(C.dim_c) + `]  ` + resetAttrs());
-  if (appState.filter.agent) out.push(color(C.dim_c) + `agent:${appState.filter.agent}  ` + resetAttrs());
-  if (appState.filter.urgency) out.push(color(C.dim_c) + `urgency:${appState.filter.urgency}  ` + resetAttrs());
-  if (appState.reconnecting) out.push(color(C.red) + ` [reconnecting…]` + resetAttrs());
-  out.push('  ' + connDot);
+  out.push(color(C.dim_c) + ' · v0.3' + resetAttrs());
+  out.push(color(C.dim_c) + ' · ' + paneStr + resetAttrs());
+  out.push(color(C.dim_c) + ' · ' + focusStr + resetAttrs());
+  out.push(reconn);
+  out.push('  ' + dot);
 
-  // Divider (row 2)
-  out.push(moveTo(2, 1) + eraseLine());
-  out.push(color(C.dim_c) + '─'.repeat(cols) + resetAttrs());
+  // ── divider (row 2) ─────────────────────────────────────────────────────
+  out.push(moveTo(2, 1) + eraseLine() + color(C.dim_c) + '─'.repeat(cols) + resetAttrs());
 
-  // Footer area: last 2 rows = keybinding hint (row rows), toast (row rows-1)
-  const FOOTER_ROWS = 2;
-  const contentRows = rows - 2 - FOOTER_ROWS; // rows available for items
+  // ── layout: events (top), compose (bottom) ──────────────────────────────
+  // Reserved: 1 status + 1 divider + 1 events header + 1 divider + 1 compose box top + 1 box bottom + 1 hint = 7 chrome rows
+  // Plus N event log rows + M compose content rows + 1 compose status line.
+  const HINT_ROWS = 1;
+  const STATUS_ROWS = 1;
+  const DIVIDER_ROWS = 1;
+  const EVENTS_HEADER_ROWS = 1;
+  const COMPOSE_STATUS_ROWS = 1;
+  const COMPOSE_BOX_ROWS = 2; // top + bottom border
 
-  // Render items
-  let row = 3;
-  const maxRow = rows - FOOTER_ROWS;
+  const fixedChrome = STATUS_ROWS + DIVIDER_ROWS + EVENTS_HEADER_ROWS + DIVIDER_ROWS
+    + COMPOSE_STATUS_ROWS + COMPOSE_BOX_ROWS + HINT_ROWS;
 
-  if (items.length === 0) {
-    out.push(moveTo(row, 1) + eraseLine());
-    out.push(dim() + color(C.dim_c) + '  (no pending items)' + resetAttrs());
-    row++;
+  const usable = Math.max(6, rows - fixedChrome);
+  // Default 1/3 events, 2/3 compose. Minimum compose 3 rows. Narrow: events min 4.
+  let eventRows = Math.max(3, Math.floor(usable / 3));
+  if (rows < 24) eventRows = Math.min(eventRows, 4);
+  if (eventRows < 4 && rows < 24) eventRows = Math.min(4, usable - 3);
+  if (eventRows < 1) eventRows = 1;
+  let composeRows = usable - eventRows;
+  if (composeRows < 3) {
+    composeRows = 3;
+    eventRows = Math.max(1, usable - composeRows);
   }
 
-  for (let i = 0; i < items.length && row <= maxRow; i++) {
-    const item = items[i];
-    const isSelected = i === selIdx;
-    const isSnoozed = item.snoozedUntil && item.snoozedUntil > Date.now();
-    const isFlashing = appState.warnFlash.has(item.id) &&
-      appState.warnFlash.get(item.id).until > Date.now();
-    const flashPhase = isFlashing ? appState.warnFlash.get(item.id).phase : 0;
+  // Row layout (1-indexed):
+  //   1                  status
+  //   2                  divider
+  //   3                  events header
+  //   4..3+eventRows     events log
+  //   4+eventRows        divider
+  //   5+eventRows        compose status
+  //   6+eventRows        compose box top
+  //   7+eventRows..      compose content
+  //   ...                compose box bottom
+  //   rows               hint
 
-    // Prefix
-    const prefix = isSelected ? '▶ ' : '  ';
-    const uc = urgencyColor(item.urgency);
+  const eventsStart = 4;
+  const eventsEnd = eventsStart + eventRows - 1;
+  const dividerRow = eventsEnd + 1;
+  const composeStatusRow = dividerRow + 1;
+  const composeBoxTopRow = composeStatusRow + 1;
+  const composeContentStart = composeBoxTopRow + 1;
+  const composeContentRows = composeRows;
+  const composeBoxBottomRow = composeContentStart + composeContentRows;
+  const hintRow = rows;
 
-    // Selection highlight / flash
-    let rowPrefix = '';
-    let rowSuffix = '';
-    if (isSelected) {
-      rowPrefix = reverse();
-    } else if (isFlashing && flashPhase % 2 === 0) {
-      rowPrefix = reverse();
-    }
-    if (isSnoozed) rowPrefix += dim();
+  // ── events header ───────────────────────────────────────────────────────
+  out.push(moveTo(3, 1) + eraseLine());
+  const filterLabel = appState.view.eventFilter === 'verbose' ? '[v] verbose' : '[v] low-noise';
+  out.push(color(C.dim_c) + ' events (last ' + visibleEvents().length + ') · ' + filterLabel + ' · [x] clear · Ctrl-Up focus' + resetAttrs());
 
-    // Title line
-    const badge = urgencyBadge(item.urgency);
-    const agentKind = item.agentKind || 'claude-code';
-    const sessionSuffix = item.sessionId ? ` · ${item.sessionId.slice(0, 8)}` : '';
-    const snoozeStr = isSnoozed ? ` ${dim()}${color(C.dim_c)}[snoozed ${fmtSnoozeRemaining(item.snoozedUntil)}]${resetAttrs()}` : '';
-    const titleAvail = cols - 2 - 9 - 3 - agentKind.length - sessionSuffix.length - 8;
-    const titleTxt = truncate(item.title, Math.max(10, titleAvail));
+  // ── events log ──────────────────────────────────────────────────────────
+  const evs = visibleEvents();
+  // Newest at bottom. Default scroll: tail.
+  const maxScroll = Math.max(0, evs.length - eventRows);
+  let scroll = appState.view.eventScroll;
+  if (scroll > maxScroll) scroll = maxScroll;
+  if (scroll < 0) scroll = 0;
+  appState.view.eventScroll = scroll;
+  const startIdx = Math.max(0, evs.length - eventRows - scroll);
+  const endIdx = Math.min(evs.length, startIdx + eventRows);
+  const slice = evs.slice(startIdx, endIdx);
 
-    // Badge coloring
-    const badgeColor = `${color(uc)}`;
+  for (let r = 0; r < eventRows; r++) {
+    const rowNum = eventsStart + r;
+    out.push(moveTo(rowNum, 1) + eraseLine());
+    const ev = slice[r];
+    if (!ev) continue;
+    const time = fmtHHMM(ev.createdAt || Date.now());
+    const kindStr = pad(ev.kind, 9);
+    const titleAvail = Math.max(8, cols - 2 - 5 - 1 - 9 - 3 - 4);
+    const titleText = truncate(eventTitle(ev), titleAvail);
+    const isSelected = appState.view.focus === 'events' && (startIdx + r === evs.length - 1 - scroll);
+    if (isSelected) out.push(reverse());
+    out.push(color(C.dim_c) + ' ' + time + ' · ' + resetAttrs());
+    out.push(color(kindColor(ev.kind)) + kindStr + resetAttrs());
+    out.push(color(urgencyColor(ev.urgency)) + ' · ' + resetAttrs());
+    out.push(color(C.white) + titleText + resetAttrs());
+    if (isSelected) out.push(resetAttrs());
+  }
 
-    if (row <= maxRow) {
-      out.push(moveTo(row, 1) + eraseLine());
-      if (isSelected) {
-        out.push(reverse() + bold());
-      } else if (isSnoozed) {
-        out.push(dim());
-      }
-      out.push(color(uc) + prefix);
-      out.push(badgeColor + badge + resetAttrs());
-      if (isSelected) out.push(reverse() + bold());
-      else if (isSnoozed) out.push(dim());
-      out.push(` ${color(C.white)}${bold()}${truncate(item.title, Math.min(titleAvail + 20, cols - 12))}${resetAttrs()}`);
-      if (isSnoozed) out.push(dim() + color(C.dim_c) + ` [snoozed ${fmtSnoozeRemaining(item.snoozedUntil)}]` + resetAttrs());
-      out.push(resetAttrs());
-      row++;
-    }
+  // ── divider before compose ──────────────────────────────────────────────
+  out.push(moveTo(dividerRow, 1) + eraseLine() + color(C.dim_c) + '─'.repeat(cols) + resetAttrs());
 
-    // Agent line: [projectName · ][branch · ][agentKind · ]session8
-    if (row <= maxRow) {
-      out.push(moveTo(row, 1) + eraseLine());
-      if (isSnoozed) out.push(dim());
-      const { cols: tuiCols } = termSize();
-      const agentLineParts = [];
-      if (item.projectName) agentLineParts.push(item.projectName);
-      if (item.gitBranch) agentLineParts.push(item.gitBranch);
-      agentLineParts.push(agentKind);
-      if (item.sessionId) agentLineParts.push(item.sessionId.slice(0, 8));
-      const agentLineText = agentLineParts.join(' · ');
-      const agentLineTruncated = truncate(agentLineText, Math.max(10, tuiCols - 6));
-      out.push(`   ${color(C.dim_c)}${agentLineTruncated}  ${fmtAge(item.createdAt)}${resetAttrs()}`);
-      row++;
-    }
+  // ── compose status line ─────────────────────────────────────────────────
+  out.push(moveTo(composeStatusRow, 1) + eraseLine());
+  const lineCount = appState.compose.lines.length;
+  const wordCount = composeWordCount();
+  const dirtyTag = appState.compose.dirty ? ' · *unsaved' : '';
+  const composeFocusTag = appState.view.focus === 'compose' ? bold() + color(C.amber) + 'compose' + resetAttrs() : color(C.dim_c) + 'compose' + resetAttrs();
+  out.push(' ' + composeFocusTag + color(C.dim_c)
+    + ` · lines: ${lineCount} · words: ${wordCount}${dirtyTag}` + resetAttrs());
 
-    // Snippet
-    if (item.snippet && row <= maxRow) {
-      out.push(moveTo(row, 1) + eraseLine());
-      if (isSnoozed) out.push(dim());
-      out.push(`   ${color(C.dim_c)}${truncate(item.snippet, cols - 6)}${resetAttrs()}`);
-      row++;
-    }
+  // ── compose box top border ──────────────────────────────────────────────
+  out.push(moveTo(composeBoxTopRow, 1) + eraseLine());
+  out.push(color(C.dim_c) + '┌' + '─'.repeat(Math.max(0, cols - 2)) + '┐' + resetAttrs());
 
-    // Transcript context
-    if (item.transcriptSnapshot) {
-      const lines = item.transcriptSnapshot.split('\n');
-      const expanded = appState.expandedContext.has(item.id);
-      if (!expanded) {
-        // Collapsed: show summary line
-        if (row <= maxRow) {
-          out.push(moveTo(row, 1) + eraseLine());
-          if (isSnoozed) out.push(dim());
-          out.push(`   ${color(C.dim_c)}▸ context (${lines.length} lines)${resetAttrs()}`);
-          row++;
+  // ── compose content ─────────────────────────────────────────────────────
+  // Adjust visible window to keep cursor on screen.
+  const innerCols = Math.max(4, cols - 4); // 2 borders + 2 padding
+  const c = appState.compose;
+  // Vertical: scroll so cursor row is between 0 and composeContentRows-1.
+  if (c.cur.row < c.visibleRowOffset) c.visibleRowOffset = c.cur.row;
+  if (c.cur.row >= c.visibleRowOffset + composeContentRows) {
+    c.visibleRowOffset = c.cur.row - composeContentRows + 1;
+  }
+  if (c.visibleRowOffset < 0) c.visibleRowOffset = 0;
+  // Horizontal: scroll so cursor col is between 0 and innerCols-1.
+  if (c.cur.col < c.colOffset) c.colOffset = c.cur.col;
+  if (c.cur.col >= c.colOffset + innerCols) {
+    c.colOffset = c.cur.col - innerCols + 1;
+  }
+  if (c.colOffset < 0) c.colOffset = 0;
+
+  for (let r = 0; r < composeContentRows; r++) {
+    const rowNum = composeContentStart + r;
+    out.push(moveTo(rowNum, 1) + eraseLine());
+    const lineIdx = c.visibleRowOffset + r;
+    const line = c.lines[lineIdx];
+    out.push(color(C.dim_c) + '│' + resetAttrs());
+    if (line === undefined) {
+      out.push(' '.repeat(innerCols + 2));
+    } else {
+      const sliced = line.slice(c.colOffset, c.colOffset + innerCols);
+      // Pad to fill
+      const padded = sliced + ' '.repeat(Math.max(0, innerCols - sliced.length));
+      // Render with cursor overlay if this is the cursor row AND focus on compose.
+      if (lineIdx === c.cur.row && appState.view.focus === 'compose') {
+        const localCol = c.cur.col - c.colOffset;
+        if (localCol >= 0 && localCol < innerCols) {
+          const before = padded.slice(0, localCol);
+          const at = padded[localCol] || ' ';
+          const after = padded.slice(localCol + 1);
+          out.push(' ' + before + reverse() + at + resetAttrs() + after + ' ');
+        } else {
+          out.push(' ' + padded + ' ');
         }
       } else {
-        // Expanded: show up to 12 lines (scrollable)
-        const scroll = appState.contextScroll.get(item.id) || 0;
-        const showLines = lines.slice(scroll, scroll + 12);
-        if (row <= maxRow) {
-          out.push(moveTo(row, 1) + eraseLine());
-          if (isSnoozed) out.push(dim());
-          out.push(`   ${color(C.dim_c)}▾ context (${lines.length} lines, scroll ,/.)${resetAttrs()}`);
-          row++;
-        }
-        for (const line of showLines) {
-          if (row > maxRow) break;
-          out.push(moveTo(row, 1) + eraseLine());
-          if (isSnoozed) out.push(dim());
-          out.push(`     ${color(C.dim_c)}${truncate(line, cols - 7)}${resetAttrs()}`);
-          row++;
-        }
+        out.push(' ' + padded + ' ');
       }
     }
-
-    // Action hints (selected item only)
-    if (isSelected && row <= maxRow) {
-      out.push(moveTo(row, 1) + eraseLine());
-      out.push(`   ${color(C.dim_c)}[r]eply  [s]nooze  [a]ck  [x]dismiss${resetAttrs()}`);
-      row++;
-    }
-
-    // Divider between items
-    if (i < items.length - 1 && row <= maxRow) {
-      out.push(moveTo(row, 1) + eraseLine());
-      out.push(dim() + color(C.dim_c) + ' ' + '─'.repeat(cols - 2) + resetAttrs());
-      row++;
-    }
+    out.push(color(C.dim_c) + '│' + resetAttrs());
   }
 
-  // Clear remaining content rows
-  while (row <= maxRow) {
-    out.push(moveTo(row, 1) + eraseLine());
-    row++;
+  // ── compose box bottom border ───────────────────────────────────────────
+  out.push(moveTo(composeBoxBottomRow, 1) + eraseLine());
+  out.push(color(C.dim_c) + '└' + '─'.repeat(Math.max(0, cols - 2)) + '┘' + resetAttrs());
+
+  // ── hint row ────────────────────────────────────────────────────────────
+  out.push(moveTo(hintRow, 1) + eraseLine());
+  let hint;
+  if (appState.view.focus === 'compose') {
+    hint = ' Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-X clear · Ctrl-Z undo · Ctrl-Y redo · Ctrl-Up events · Ctrl-Q quit';
+  } else {
+    hint = ' j/k or ↑↓ scroll · v filter · x clear log · Enter detail · Ctrl-Down compose · Ctrl-Q quit';
+  }
+  out.push(dim() + color(C.dim_c) + truncate(hint, cols - 1) + resetAttrs());
+
+  // ── toast (drawn over the hint row, transient) ──────────────────────────
+  if (appState.toast && appState.toast.expiresAt > Date.now()) {
+    out.push(moveTo(hintRow, 1) + eraseLine());
+    out.push(color(C.green) + bold() + ' ✓ ' + appState.toast.text + resetAttrs());
   }
 
-  // Toast (row rows-1)
-  out.push(moveTo(rows - 1, 1) + eraseLine());
-  if (appState.toast && (appState.toast.persistent || appState.toast.expiresAt > Date.now())) {
-    const toastPrefix = appState.toast.persistent ? ' ! ' : ' ✓ ';
-    out.push(color(C.green) + bold() + toastPrefix + appState.toast.text + resetAttrs());
-    if (appState.toast.persistent) {
-      out.push(dim() + color(C.dim_c) + '  [any key to dismiss]' + resetAttrs());
-    }
+  // ── modal overlay ───────────────────────────────────────────────────────
+  if (appState.modal) {
+    renderModal(out, rows, cols);
   }
-
-  // Overlay: reply mode
-  if (appState.overlay?.type === 'reply') {
-    out.push(moveTo(rows - 1, 1) + eraseLine());
-    out.push(color(C.amber) + bold() + ' reply: ' + resetAttrs());
-    out.push(appState.replyText + '█');
-  }
-
-  // Overlay: snooze picker
-  if (appState.overlay?.type === 'snooze') {
-    out.push(moveTo(rows - 1, 1) + eraseLine());
-    out.push(color(C.yellow) + bold() + ' snooze: ' + resetAttrs());
-    out.push(color(C.dim_c) + '[1] 5m  [2] 15m  [3] 1h  [4] 4h  [Esc] cancel' + resetAttrs());
-  }
-
-  // Overlay: filter
-  if (appState.overlay?.type === 'filter') {
-    out.push(moveTo(rows - 1, 1) + eraseLine());
-    out.push(color(C.amber) + bold() + ' filter: ' + resetAttrs());
-    out.push(color(C.dim_c) + '(a)gent (u)rgency (k)ind (c)lear  [Esc] cancel' + resetAttrs());
-  }
-
-  // Keybinding hint (last row)
-  out.push(moveTo(rows, 1) + eraseLine());
-  const hints = 'j/k move · Enter resume · r reply · s snooze · a ack · x dismiss · / filter · b box · q quit';
-  out.push(dim() + color(C.dim_c) + truncate(hints, cols - 1) + resetAttrs());
 
   process.stdout.write(out.join(''));
+}
+
+function renderModal(out, rows, cols) {
+  const m = appState.modal;
+  const w = Math.min(cols - 4, 80);
+  const titleBar = ' ' + (m.title || 'detail') + ' ';
+  const lines = (m.lines || []);
+  const h = Math.min(rows - 4, lines.length + 4);
+  const startRow = Math.max(2, Math.floor((rows - h) / 2));
+  const startCol = Math.max(2, Math.floor((cols - w) / 2));
+
+  // Top border
+  out.push(moveTo(startRow, startCol) + color(C.amber)
+    + '┌' + truncate(titleBar, w - 2) + '─'.repeat(Math.max(0, w - 2 - titleBar.length))
+    + '┐' + resetAttrs());
+
+  for (let i = 0; i < h - 2; i++) {
+    const ln = lines[i] || '';
+    out.push(moveTo(startRow + 1 + i, startCol)
+      + color(C.amber) + '│' + resetAttrs()
+      + ' ' + truncate(ln, w - 4) + ' '.repeat(Math.max(0, w - 4 - truncate(ln, w - 4).length))
+      + ' ' + color(C.amber) + '│' + resetAttrs());
+  }
+
+  out.push(moveTo(startRow + h - 1, startCol)
+    + color(C.amber) + '└' + '─'.repeat(Math.max(0, w - 2)) + '┘' + resetAttrs());
+
+  out.push(moveTo(startRow + h, startCol)
+    + dim() + color(C.dim_c) + ' [Esc] close' + resetAttrs());
 }
 
 // ─── No-TTY mode ──────────────────────────────────────────────────────────────
 let noTtyTimer = null;
 
 function renderNoTty() {
-  const items = filteredItems();
-  const pending = items.filter((it) => !it.resolved).length;
+  const evs = visibleEvents();
   const snap = {
     connected: appState.connected,
-    pending,
-    items: items.slice(0, 10).map((it) => ({
-      id: it.id, kind: it.kind, urgency: it.urgency, title: it.title,
+    paneId: appState.paneId,
+    pending: appState.events.filter((it) => !it.resolved).length,
+    eventFilter: appState.view.eventFilter,
+    composeLines: appState.compose.lines.length,
+    composeWords: composeWordCount(),
+    events: evs.slice(-10).map((ev) => ({
+      id: ev.id, kind: ev.kind, urgency: ev.urgency, title: eventTitle(ev),
     })),
   };
   process.stdout.write(JSON.stringify(snap) + '\n');
 }
 
 function startNoTtyLoop() {
-  // Emit snapshots every 200ms until SIGTERM/SIGINT.
-  // Do NOT resume stdin — background processes get stdin = /dev/null which
-  // immediately fires 'end' and would cause premature exit.
-  // Tests send SIGTERM to stop the process cleanly.
-
-  // Write initial snapshot after giving the WS connection time to establish.
   setTimeout(renderNoTty, 150);
-
   noTtyTimer = setInterval(renderNoTty, 200);
-
-  // Keep the event loop alive explicitly (the interval already does this,
-  // but be explicit for clarity).
   noTtyTimer.ref?.();
-
-  // In --no-tty mode, SIGTERM and SIGINT are clean exits (used by test harness).
   process.on('SIGTERM', () => { clearInterval(noTtyTimer); cleanup(0); });
   process.on('SIGINT',  () => { clearInterval(noTtyTimer); cleanup(0); });
 }
@@ -559,19 +768,121 @@ function cleanup(code = 0) {
 
 // ─── Toast helper ─────────────────────────────────────────────────────────────
 function showToast(text, ms = 2000) {
-  appState.toast = { text, expiresAt: Date.now() + ms, persistent: false };
+  appState.toast = { text, expiresAt: Date.now() + ms };
   setTimeout(() => {
-    if (appState.toast && !appState.toast.persistent) {
+    if (appState.toast && appState.toast.expiresAt <= Date.now()) {
       appState.toast = null;
       scheduleRender();
     }
-  }, ms);
+  }, ms + 50);
   scheduleRender();
 }
 
-function showPersistentToast(text) {
-  // Persistent toasts stay until any keypress dismisses them.
-  appState.toast = { text, expiresAt: Infinity, persistent: true };
+// ─── pane discovery ───────────────────────────────────────────────────────────
+function discoverPane() {
+  // Daemon override wins.
+  if (appState.paneOverride) {
+    appState.paneId = appState.paneOverride;
+    return appState.paneId;
+  }
+  try {
+    const res = spawnSync('bash', [TMUX_SEND, 'discover'], { encoding: 'utf8' });
+    const out = (res.stdout || '').trim();
+    appState.paneId = out || null;
+    return appState.paneId;
+  } catch {
+    appState.paneId = null;
+    return null;
+  }
+}
+
+// ─── send to claude pane ──────────────────────────────────────────────────────
+async function sendToPane(port, opts = { autoEnter: false }) {
+  const text = composeText();
+  if (!text || text.trim() === '') {
+    showToast('(nothing to send)');
+    return;
+  }
+  if (!appState.paneId) discoverPane();
+  if (!appState.paneId) {
+    showToast('no claude pane in this window — set with /sb-attach <pane_id>', 3500);
+    return;
+  }
+  const pane = appState.paneId;
+  // Send literal text via tmux send-keys -l (helper handles quoting via stdin).
+  const sendRes = spawnSync('bash', [TMUX_SEND, 'send', pane], {
+    input: text,
+    encoding: 'utf8',
+  });
+  if (sendRes.status !== 0) {
+    showToast('send failed: ' + (sendRes.stderr || '').trim().slice(0, 80), 3500);
+    return;
+  }
+  // Focus the pane so the human can review before submitting.
+  spawnSync('bash', [TMUX_SEND, 'focus', pane], { encoding: 'utf8' });
+  if (opts.autoEnter) {
+    spawnSync('bash', [TMUX_SEND, 'enter', pane], { encoding: 'utf8' });
+  }
+  // Record the send in the daemon's event log.
+  try {
+    await httpPost(port, '/sent', { text, paneId: pane });
+  } catch {
+    // non-fatal: send already happened
+  }
+  // Clear compose buffer.
+  clearCompose();
+  if (opts.autoEnter) {
+    showToast('sent + Enter → claude pane');
+  } else {
+    showToast('sent → claude pane focused; review and press Enter');
+  }
+}
+
+// ─── external editor escape ───────────────────────────────────────────────────
+function externalEditor() {
+  if (NO_TTY) return;
+  const editor = process.env.EDITOR || 'nano';
+  const tmpDir = os.tmpdir();
+  const tmpFile = path.join(tmpDir, `illo-compose-${process.pid}-${Date.now()}.md`);
+  try {
+    fs.writeFileSync(tmpFile, composeText(), 'utf8');
+  } catch (e) {
+    showToast('tmp write failed: ' + e.message);
+    return;
+  }
+  // Pause TUI input + leave alt screen so the editor owns the terminal.
+  try { process.stdin.setRawMode(false); } catch {}
+  process.stdin.pause();
+  process.stdout.write(showCursor() + altScreenOff() + resetAttrs());
+  let res;
+  try {
+    res = spawnSync(editor, [tmpFile], { stdio: 'inherit' });
+  } catch (e) {
+    res = { status: 1, error: e };
+  }
+  // Re-enter alt screen + raw mode.
+  process.stdout.write(altScreenOn() + clearScreen() + hideCursor());
+  try { process.stdin.setRawMode(true); } catch {}
+  process.stdin.resume();
+
+  if (res && res.status === 0) {
+    let newText = '';
+    try { newText = fs.readFileSync(tmpFile, 'utf8'); } catch {}
+    pushUndo(true);
+    appState.compose.lines = newText.split('\n');
+    if (appState.compose.lines.length === 0) appState.compose.lines = [''];
+    // Place cursor at end.
+    appState.compose.cur.row = appState.compose.lines.length - 1;
+    appState.compose.cur.col = (appState.compose.lines[appState.compose.cur.row] || '').length;
+    appState.compose.visibleRowOffset = 0;
+    appState.compose.colOffset = 0;
+    markDirty();
+    endUndoGroup();
+    showToast('loaded ' + appState.compose.lines.length + ' line(s) from $EDITOR');
+  } else {
+    showToast('editor exited non-zero — buffer unchanged');
+  }
+  try { fs.unlinkSync(tmpFile); } catch {}
   scheduleRender();
 }
 
@@ -613,7 +924,6 @@ function connectWS(port) {
       handshakeBuf += chunk.toString('binary');
       const headerEnd = handshakeBuf.indexOf('\r\n\r\n');
       if (headerEnd === -1) return;
-      // Validate upgrade response
       if (!handshakeBuf.includes(expectedAccept)) {
         wsSocket.destroy();
         return;
@@ -622,8 +932,6 @@ function connectWS(port) {
       appState.connected = true;
       appState.reconnecting = false;
       reconnectDelay = 1000;
-      appState.reconnectAttempts = 0;
-      // Remaining bytes after headers are WS frame data
       const rest = handshakeBuf.slice(headerEnd + 4);
       wsBuffer = Buffer.from(rest, 'binary');
       scheduleRender();
@@ -635,10 +943,7 @@ function connectWS(port) {
   });
 
   wsSocket.on('error', () => scheduleReconnect(port));
-  wsSocket.on('close', () => {
-    if (handshakeDone) scheduleReconnect(port);
-    else scheduleReconnect(port);
-  });
+  wsSocket.on('close', () => scheduleReconnect(port));
 }
 
 function processWsBuffer() {
@@ -650,10 +955,7 @@ function processWsBuffer() {
     if (!result.consumed) break;
     wsBuffer = wsBuffer.slice(result.consumed);
     if (result.text) {
-      try {
-        const msg = JSON.parse(result.text);
-        handleWsMessage(msg);
-      } catch {}
+      try { handleWsMessage(JSON.parse(result.text)); } catch {}
     }
   }
 }
@@ -666,11 +968,11 @@ function scheduleReconnect(port) {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
-    appState.reconnectAttempts++;
-    // Re-fetch state when we reconnect
     httpGet(port, '/state').then((data) => {
-      appState.items = data.items || [];
+      appState.events = data.items || [];
       appState.config = data.config || {};
+      appState.paneOverride = data.config?.paneOverride || null;
+      if (appState.paneOverride) appState.paneId = appState.paneOverride;
     }).catch(() => {});
     connectWS(port);
   }, reconnectDelay);
@@ -679,62 +981,45 @@ function scheduleReconnect(port) {
 function handleWsMessage(msg) {
   switch (msg.type) {
     case 'snapshot':
-      appState.items = msg.items || [];
+      appState.events = msg.items || [];
       appState.config = msg.config || {};
+      appState.paneOverride = msg.config?.paneOverride || null;
+      if (appState.paneOverride) appState.paneId = appState.paneOverride;
       break;
     case 'item:add':
-      if (msg.item) {
-        const idx = appState.items.findIndex((it) => it.id === msg.item.id);
-        if (idx === -1) appState.items.push(msg.item);
-        else appState.items[idx] = msg.item;
-      }
-      break;
     case 'item:update':
       if (msg.item) {
-        const idx = appState.items.findIndex((it) => it.id === msg.item.id);
-        if (idx === -1) appState.items.push(msg.item);
-        else appState.items[idx] = msg.item;
+        const idx = appState.events.findIndex((it) => it.id === msg.item.id);
+        if (idx === -1) appState.events.push(msg.item);
+        else appState.events[idx] = msg.item;
       }
       break;
     case 'item:remove':
-      if (msg.id) appState.items = appState.items.filter((it) => it.id !== msg.id);
-      break;
-    case 'item:warn':
-      if (msg.id) {
-        // Flash animation: set flash state, re-render a few times
-        const flashUntil = Date.now() + 800; // 2× 400ms cycles
-        appState.warnFlash.set(msg.id, { until: flashUntil, phase: 0 });
-        let flashCount = 0;
-        const flashInterval = setInterval(() => {
-          flashCount++;
-          const state = appState.warnFlash.get(msg.id);
-          if (state) state.phase = flashCount;
-          if (flashCount >= 4 || Date.now() >= flashUntil) {
-            clearInterval(flashInterval);
-            appState.warnFlash.delete(msg.id);
-          }
-          scheduleRender();
-        }, 200);
-      }
+      if (msg.id) appState.events = appState.events.filter((it) => it.id !== msg.id);
       break;
     case 'config':
       appState.config = msg.config || appState.config;
+      const newOverride = msg.config?.paneOverride || null;
+      appState.paneOverride = newOverride;
+      if (newOverride) appState.paneId = newOverride;
       break;
     case 'cleared':
       if (Array.isArray(msg.ids)) {
-        appState.items = appState.items.filter((it) => !msg.ids.includes(it.id));
+        appState.events = appState.events.filter((it) => !msg.ids.includes(it.id));
       }
+      break;
+    default:
       break;
   }
   scheduleRender();
 }
 
-// ─── Keyboard input ───────────────────────────────────────────────────────────
+// ─── keyboard input ───────────────────────────────────────────────────────────
 let inputBuf = Buffer.alloc(0);
 
 function setupInput(port) {
-  if (!process.stdin.isTTY && !NO_TTY) return;
   if (NO_TTY) return;
+  if (!process.stdin.isTTY) return;
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -745,7 +1030,6 @@ function setupInput(port) {
       inputBuf = Buffer.concat([inputBuf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
       processInputBuffer(port);
     } catch (err) {
-      // Surface the error in the alt-screen so it doesn't just kill the pane silently.
       try { process.stderr.write(`\x1b[?1049l\x1b[?25h\nillo-tui input handler crashed: ${err && err.stack || err}\n`); } catch {}
       cleanup(1);
     }
@@ -765,243 +1049,299 @@ function parseKey(buf) {
   if (buf.length === 0) return null;
   const b0 = buf[0];
 
-  // Ctrl-C
+  // C0 controls
+  if (b0 === 0x01) return { key: 'ctrl-a', consumed: 1 };
+  if (b0 === 0x02) return { key: 'ctrl-b', consumed: 1 };
   if (b0 === 0x03) return { key: 'ctrl-c', consumed: 1 };
-  // Enter
-  if (b0 === 0x0d || b0 === 0x0a) return { key: 'enter', consumed: 1 };
-  // Backspace
-  if (b0 === 0x7f || b0 === 0x08) return { key: 'backspace', consumed: 1 };
-  // Escape / escape sequences
+  if (b0 === 0x04) return { key: 'ctrl-d', consumed: 1 };
+  if (b0 === 0x05) return { key: 'ctrl-e', consumed: 1 };
+  if (b0 === 0x06) return { key: 'ctrl-f', consumed: 1 };
+  if (b0 === 0x08) return { key: 'backspace', consumed: 1 };
+  if (b0 === 0x09) return { key: 'tab', consumed: 1 };
+  if (b0 === 0x0a) return { key: 'enter', consumed: 1 };
+  if (b0 === 0x0b) return { key: 'ctrl-k', consumed: 1 };
+  if (b0 === 0x0c) return { key: 'ctrl-l', consumed: 1 };
+  if (b0 === 0x0d) return { key: 'enter', consumed: 1 };
+  if (b0 === 0x0e) return { key: 'ctrl-n', consumed: 1 };
+  if (b0 === 0x10) return { key: 'ctrl-p', consumed: 1 };
+  if (b0 === 0x11) return { key: 'ctrl-q', consumed: 1 };
+  if (b0 === 0x13) return { key: 'ctrl-s', consumed: 1 };
+  if (b0 === 0x15) return { key: 'ctrl-u', consumed: 1 };
+  if (b0 === 0x17) return { key: 'ctrl-w', consumed: 1 };
+  if (b0 === 0x18) return { key: 'ctrl-x', consumed: 1 };
+  if (b0 === 0x19) return { key: 'ctrl-y', consumed: 1 };
+  if (b0 === 0x1a) return { key: 'ctrl-z', consumed: 1 };
+  if (b0 === 0x7f) return { key: 'backspace', consumed: 1 };
+
+  // Escape sequences
   if (b0 === 0x1b) {
     if (buf.length === 1) return { key: 'esc', consumed: 1 };
     const b1 = buf[1];
     if (b1 === 0x5b) { // CSI [
-      if (buf.length < 3) return null; // wait for more
+      if (buf.length < 3) return null;
       const b2 = buf[2];
+      // Plain arrows
       if (b2 === 0x41) return { key: 'up',     consumed: 3 };
       if (b2 === 0x42) return { key: 'down',   consumed: 3 };
       if (b2 === 0x43) return { key: 'right',  consumed: 3 };
       if (b2 === 0x44) return { key: 'left',   consumed: 3 };
+      if (b2 === 0x48) return { key: 'home',   consumed: 3 };
+      if (b2 === 0x46) return { key: 'end',    consumed: 3 };
+      // Delete: ESC [ 3 ~
       if (b2 === 0x33 && buf.length >= 4 && buf[3] === 0x7e)
         return { key: 'delete', consumed: 4 };
+      // PgUp / PgDn: ESC [ 5 ~ / ESC [ 6 ~
+      if (b2 === 0x35 && buf.length >= 4 && buf[3] === 0x7e)
+        return { key: 'pgup', consumed: 4 };
+      if (b2 === 0x36 && buf.length >= 4 && buf[3] === 0x7e)
+        return { key: 'pgdn', consumed: 4 };
+      // Home/End alt: ESC [ 1 ~ / ESC [ 4 ~
+      if (b2 === 0x31 && buf.length >= 4 && buf[3] === 0x7e)
+        return { key: 'home', consumed: 4 };
+      if (b2 === 0x34 && buf.length >= 4 && buf[3] === 0x7e)
+        return { key: 'end', consumed: 4 };
+      // Modified arrows: ESC [ 1 ; 5 A (ctrl-up), ESC [ 1 ; 5 B (ctrl-down)
+      if (b2 === 0x31 && buf.length >= 6 && buf[3] === 0x3b && buf[4] === 0x35) {
+        const b5 = buf[5];
+        if (b5 === 0x41) return { key: 'ctrl-up',    consumed: 6 };
+        if (b5 === 0x42) return { key: 'ctrl-down',  consumed: 6 };
+        if (b5 === 0x43) return { key: 'ctrl-right', consumed: 6 };
+        if (b5 === 0x44) return { key: 'ctrl-left',  consumed: 6 };
+      }
+      // Unknown CSI — swallow conservatively.
       return { key: `esc-[${String.fromCharCode(b2)}`, consumed: 3 };
+    }
+    if (b1 === 0x4f) { // SS3 O — Home/End in some terminals
+      if (buf.length < 3) return null;
+      const b2 = buf[2];
+      if (b2 === 0x48) return { key: 'home', consumed: 3 };
+      if (b2 === 0x46) return { key: 'end',  consumed: 3 };
+      return { key: `esc-O${String.fromCharCode(b2)}`, consumed: 3 };
     }
     return { key: 'esc', consumed: 1 };
   }
+
+  // Multi-byte UTF-8: pass through as a single "key" of the full sequence
+  if ((b0 & 0xc0) === 0xc0) {
+    let n = 1;
+    if ((b0 & 0xf8) === 0xf0) n = 4;
+    else if ((b0 & 0xf0) === 0xe0) n = 3;
+    else if ((b0 & 0xe0) === 0xc0) n = 2;
+    if (buf.length < n) return null;
+    return { key: buf.slice(0, n).toString('utf8'), consumed: n };
+  }
+
   // Printable ASCII
   if (b0 >= 0x20 && b0 <= 0x7e) return { key: String.fromCharCode(b0), consumed: 1 };
   return { key: `raw-${b0}`, consumed: 1 };
 }
 
 function handleKey(key, port) {
-  const { overlay } = appState;
-
-  // Dismiss persistent toast on any keypress (falls through to normal handler).
-  if (appState.toast?.persistent) {
-    appState.toast = null;
-    scheduleRender();
-    // Fall through — don't swallow the key.
+  // Modal: Esc closes
+  if (appState.modal) {
+    if (key === 'esc' || key === 'enter' || key === 'ctrl-q') {
+      appState.modal = null;
+      scheduleRender();
+    }
+    return;
   }
 
   // Global quit
-  if (key === 'ctrl-c' || (key === 'q' && !overlay && !appState.boxMode)) {
+  if (key === 'ctrl-q' || key === 'ctrl-c') {
     cleanup(0);
     return;
   }
 
-  // Box mode: any key exits box mode
-  if (appState.boxMode && key !== 'q') {
-    appState.boxMode = false;
+  // Focus toggle
+  if (key === 'ctrl-up') {
+    appState.view.focus = 'events';
+    scheduleRender();
+    return;
+  }
+  if (key === 'ctrl-down') {
+    appState.view.focus = 'compose';
     scheduleRender();
     return;
   }
 
-  // Reply overlay
-  if (overlay?.type === 'reply') {
-    if (key === 'esc') {
-      appState.overlay = null;
-      appState.replyText = '';
-    } else if (key === 'enter') {
-      const item = selectedItem();
-      if (item) {
-        const text = appState.replyText;
-        const itemCopy = { ...item }; // capture sessionId before overlay clears
-        appState.overlay = null;
-        appState.replyText = '';
-        httpPost(port, `/items/${item.id}/reply`, { text })
-          .then(() => {
-            const sid = itemCopy.sessionId;
-            if (sid) {
-              showPersistentToast(`queued · type anything in session ${sid.slice(0, 8)} to deliver`);
-            } else {
-              showPersistentToast('queued · type anything in any Claude session to deliver');
-            }
-          })
-          .catch((e) => showToast(`error: ${e.message}`));
-      }
-    } else if (key === 'backspace') {
-      appState.replyText = appState.replyText.slice(0, -1);
-    } else if (key.length === 1) {
-      appState.replyText += key;
-    }
-    scheduleRender();
+  if (appState.view.focus === 'events') {
+    handleEventsKey(key, port);
     return;
   }
+  handleComposeKey(key, port);
+}
 
-  // Snooze overlay
-  if (overlay?.type === 'snooze') {
-    const snoozeMap = { '1': 300, '2': 900, '3': 3600, '4': 14400 };
-    if (key === 'esc') {
-      appState.overlay = null;
-    } else if (snoozeMap[key]) {
-      const item = selectedItem();
-      if (item) {
-        const seconds = snoozeMap[key];
-        appState.overlay = null;
-        httpPost(port, `/items/${item.id}/snooze`, { seconds })
-          .then(() => showToast(`snoozed for ${Math.round(seconds / 60)}m`))
-          .catch((e) => showToast(`error: ${e.message}`));
-      }
-    }
-    scheduleRender();
-    return;
-  }
-
-  // Filter overlay
-  if (overlay?.type === 'filter') {
-    if (key === 'esc' || key === 'c') {
-      if (key === 'c') {
-        appState.filter.agent = '';
-        appState.filter.urgency = '';
-        appState.filter.kind = '';
-      }
-      appState.overlay = null;
-    } else if (key === 'a') {
-      // Agent filter submenu: cycle through agents
-      const agents = [...new Set(appState.items.map((it) => it.agentKind).filter(Boolean))];
-      const cur = appState.filter.agent;
-      const idx = agents.indexOf(cur);
-      appState.filter.agent = agents[(idx + 1) % (agents.length + 1)] || '';
-      appState.overlay = null;
-    } else if (key === 'u') {
-      const urgencies = ['urgent', 'normal', 'low', ''];
-      const cur = appState.filter.urgency;
-      const idx = urgencies.indexOf(cur);
-      appState.filter.urgency = urgencies[(idx + 1) % urgencies.length];
-      appState.overlay = null;
-    } else if (key === 'k') {
-      const kinds = ['ask_user', 'notification', 'custom', ''];
-      const cur = appState.filter.kind;
-      const idx = kinds.indexOf(cur);
-      appState.filter.kind = kinds[(idx + 1) % kinds.length];
-      appState.overlay = null;
-    }
-    // Reset selection when filter changes
-    appState.selectedIdx = 0;
-    scheduleRender();
-    return;
-  }
-
-  // Normal mode
-  const items = filteredItems();
-  const selIdx = appState.selectedIdx;
-
+function handleEventsKey(key, port) {
+  const evs = visibleEvents();
+  const v = appState.view;
   switch (key) {
     case 'j':
     case 'down':
-      appState.selectedIdx = Math.min(selIdx + 1, Math.max(0, items.length - 1));
+      v.eventScroll = Math.max(0, v.eventScroll - 1);
       break;
     case 'k':
     case 'up':
-      appState.selectedIdx = Math.max(selIdx - 1, 0);
+      v.eventScroll = Math.min(Math.max(0, evs.length - 1), v.eventScroll + 1);
+      break;
+    case 'pgdn':
+      v.eventScroll = Math.max(0, v.eventScroll - 5);
+      break;
+    case 'pgup':
+      v.eventScroll = Math.min(Math.max(0, evs.length - 1), v.eventScroll + 5);
+      break;
+    case 'v':
+      v.eventFilter = v.eventFilter === 'verbose' ? 'low-noise' : 'verbose';
+      v.eventScroll = 0;
+      showToast(`event filter: ${v.eventFilter}`);
+      break;
+    case 'x':
+      // Clear the in-memory event log view (does not delete from daemon)
+      appState.events = appState.events.filter((ev) => !ev.resolved);
+      v.eventScroll = 0;
+      showToast('cleared resolved events from log view');
       break;
     case 'enter': {
-      const item = selectedItem();
-      if (item) {
-        const itemCopy = { ...item };
-        httpPost(port, `/items/${item.id}/resume`, {})
-          .then(() => {
-            const sid = itemCopy.sessionId;
-            if (sid) {
-              showPersistentToast(`queued · type anything in session ${sid.slice(0, 8)} to deliver`);
-            } else {
-              showPersistentToast('queued · type anything in any Claude session to deliver');
-            }
-          })
-          .catch((e) => showToast(`error: ${e.message}`));
+      // Open detail modal for currently focused event
+      const idx = evs.length - 1 - v.eventScroll;
+      const ev = evs[idx];
+      if (!ev) return;
+      const lines = [];
+      lines.push(`kind:    ${ev.kind}`);
+      lines.push(`urgency: ${ev.urgency}`);
+      if (ev.sessionId) lines.push(`session: ${ev.sessionId}`);
+      lines.push('');
+      lines.push(eventTitle(ev));
+      if (ev.snippet) {
+        lines.push('');
+        lines.push(ev.snippet);
       }
+      if (ev.transcriptSnapshot) {
+        lines.push('');
+        lines.push('— transcript snapshot —');
+        const snap = ev.transcriptSnapshot.split('\n').slice(0, 6);
+        for (const ln of snap) lines.push(ln);
+      }
+      appState.modal = { type: 'event-detail', title: 'event ' + ev.kind, lines };
       break;
     }
-    case 'r':
-      if (selectedItem()) {
-        appState.overlay = { type: 'reply' };
-        appState.replyText = '';
-      }
-      break;
-    case 's':
-      if (selectedItem()) {
-        appState.overlay = { type: 'snooze' };
-      }
-      break;
-    case 'a': {
-      const item = selectedItem();
-      if (item) {
-        httpPost(port, `/items/${item.id}/focus`, {})
-          .then(() => showToast('acknowledged'))
-          .catch((e) => showToast(`error: ${e.message}`));
-      }
-      break;
-    }
-    case 'x':
-    case 'delete': {
-      const item = selectedItem();
-      if (item) {
-        httpDelete(port, `/items/${item.id}`)
-          .then(() => showToast('dismissed'))
-          .catch((e) => showToast(`error: ${e.message}`));
-      }
-      break;
-    }
-    case 'c': {
-      const item = selectedItem();
-      if (item && item.transcriptSnapshot) {
-        if (appState.expandedContext.has(item.id)) {
-          appState.expandedContext.delete(item.id);
-          appState.contextScroll.delete(item.id);
-        } else {
-          appState.expandedContext.add(item.id);
-          appState.contextScroll.set(item.id, 0);
-        }
-      }
-      break;
-    }
-    case ',': {
-      const item = selectedItem();
-      if (item && appState.expandedContext.has(item.id)) {
-        const lines = (item.transcriptSnapshot || '').split('\n').length;
-        const cur = appState.contextScroll.get(item.id) || 0;
-        appState.contextScroll.set(item.id, Math.max(0, cur - 1));
-      }
-      break;
-    }
-    case '.': {
-      const item = selectedItem();
-      if (item && appState.expandedContext.has(item.id)) {
-        const lines = (item.transcriptSnapshot || '').split('\n');
-        const cur = appState.contextScroll.get(item.id) || 0;
-        appState.contextScroll.set(item.id, Math.min(cur + 1, Math.max(0, lines.length - 12)));
-      }
-      break;
-    }
-    case '/':
-      appState.overlay = { type: 'filter' };
-      break;
-    case 'b':
-      appState.boxMode = !appState.boxMode;
-      break;
     default:
       break;
   }
+  scheduleRender();
+}
+
+function handleComposeKey(key, port) {
+  // Ctrl shortcuts
+  switch (key) {
+    case 'ctrl-s':
+      sendToPane(port, { autoEnter: false });
+      return;
+    case 'ctrl-d':
+      sendToPane(port, { autoEnter: true });
+      return;
+    case 'ctrl-e':
+      externalEditor();
+      return;
+    case 'ctrl-x':
+      if (composeText().length === 0) {
+        showToast('(buffer already empty)');
+      } else {
+        clearCompose();
+        showToast('compose cleared');
+      }
+      scheduleRender();
+      return;
+    case 'ctrl-z':
+      undo();
+      scheduleRender();
+      return;
+    case 'ctrl-y':
+      redo();
+      scheduleRender();
+      return;
+    case 'ctrl-w':
+      deleteWordBackward();
+      scheduleRender();
+      return;
+    case 'ctrl-u':
+      killLineBackward();
+      scheduleRender();
+      return;
+    case 'ctrl-k':
+      killToEol();
+      scheduleRender();
+      return;
+    case 'ctrl-a':
+      cursorHome();
+      scheduleRender();
+      return;
+    case 'ctrl-l':
+      // Redraw
+      process.stdout.write(clearScreen());
+      scheduleRender();
+      return;
+  }
+
+  // Cursor + text editing
+  switch (key) {
+    case 'left':
+      cursorLeft();
+      break;
+    case 'right':
+      cursorRight();
+      break;
+    case 'up':
+      cursorUp();
+      break;
+    case 'down':
+      cursorDown();
+      break;
+    case 'home':
+      cursorHome();
+      break;
+    case 'end':
+      cursorEnd();
+      break;
+    case 'pgup':
+      endUndoGroup();
+      {
+        const { rows } = termSize();
+        appState.compose.cur.row = Math.max(0, appState.compose.cur.row - (rows - 1));
+        clampCursor();
+      }
+      break;
+    case 'pgdn':
+      endUndoGroup();
+      {
+        const { rows } = termSize();
+        appState.compose.cur.row = Math.min(appState.compose.lines.length - 1, appState.compose.cur.row + (rows - 1));
+        clampCursor();
+      }
+      break;
+    case 'backspace':
+      backspaceChar();
+      break;
+    case 'delete':
+      deleteChar();
+      break;
+    case 'enter':
+      insertNewline();
+      break;
+    case 'tab':
+      insertChar('  ');
+      break;
+    case 'esc':
+      // No-op in compose mode (reserved for modal cancellation handled above)
+      break;
+    default:
+      // Printable / utf-8
+      if (typeof key === 'string' && key.length >= 1 && !key.startsWith('esc') && !key.startsWith('raw') && !key.startsWith('ctrl')) {
+        // Treat as text input
+        insertChar(key);
+      }
+      break;
+  }
+  clampCursor();
   scheduleRender();
 }
 
@@ -1010,10 +1350,7 @@ async function main() {
   const port = discoverPort();
 
   if (!NO_TTY) {
-    // Enter alternate screen, hide cursor
     process.stdout.write(altScreenOn() + clearScreen() + hideCursor());
-
-    // Signal handlers
     process.on('SIGINT', () => cleanup(0));
     process.on('SIGTERM', () => cleanup(0));
     process.on('SIGWINCH', () => scheduleRender());
@@ -1022,22 +1359,23 @@ async function main() {
   // Try initial state fetch
   try {
     const data = await httpGet(port, '/state');
-    appState.items = data.items || [];
+    appState.events = data.items || [];
     appState.config = data.config || {};
-  } catch {
-    // Daemon not up yet; WS reconnect will handle it
-  }
+    appState.paneOverride = data.config?.paneOverride || null;
+  } catch {}
 
-  // Connect WebSocket
+  // Pane discovery
+  discoverPane();
+
+  // Connect WS
   connectWS(port);
 
-  // Setup keyboard input
+  // Setup keyboard
   setupInput(port);
 
   if (NO_TTY) {
     startNoTtyLoop();
   } else {
-    // Initial render
     scheduleRender();
   }
 }

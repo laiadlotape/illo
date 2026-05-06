@@ -155,11 +155,16 @@ FINAL_COUNT="$(get_json /state | jq '.items | length')"
 assert_eq "item count after /clear" "$FINAL_COUNT" "0"
 echo "  /clear after resolving item empties the list  ok"
 
-# ---------- v0.2: /protocol metadata ----------
+# ---------- v0.3: /protocol metadata ----------
 PROTO_JSON="$(get_json /protocol)"
 PROTO_VERSION="$(echo "$PROTO_JSON" | jq -r '.version')"
-[[ "$PROTO_VERSION" == 0.2.* ]] || fail "/protocol version expected 0.2.x, got '$PROTO_VERSION'"
+[[ "$PROTO_VERSION" == 0.3.* ]] || fail "/protocol version expected 0.3.x, got '$PROTO_VERSION'"
 echo "  /protocol version=$PROTO_VERSION  ok"
+
+# /protocol should list 'sent' as a supported kind.
+PROTO_HAS_SENT="$(echo "$PROTO_JSON" | jq -r '.kinds | index("sent") // -1')"
+[[ "$PROTO_HAS_SENT" != "-1" ]] || fail "/protocol.kinds should include 'sent'"
+echo "  /protocol.kinds includes 'sent'  ok"
 
 # ---------- v0.2: post a custom (LangGraph-style) event ----------
 post_json /event '{
@@ -409,6 +414,53 @@ HOOK_OUT=$(printf '{"session_id":"sid12","prompt":"test"}' | \
   bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/on-user-prompt.sh")
 echo "$HOOK_OUT" | jq -e '.hookSpecificOutput.additionalContext | contains("recent_transcript:")' >/dev/null && echo "  hook injected recent_transcript  ok" || { echo "  FAIL: hook didn't inject snapshot"; echo "$HOOK_OUT"; exit 1; }
 echo "$HOOK_OUT" | jq -e '.hookSpecificOutput.additionalContext | contains("assistant: hello world")' >/dev/null && echo "  hook included transcript content  ok" || { echo "  FAIL: snapshot content missing"; exit 1; }
+
+# ---------- v0.3: POST /sent ----------
+SENT_RESP="$(post_json /sent '{
+  "text": "Drop users_old. Backup verified at /backups/users-2026-05.",
+  "paneId": "%4",
+  "session_id": "sent-sess"
+}')"
+SENT_OK="$(echo "$SENT_RESP" | jq -r '.ok')"
+assert_eq "/sent returns ok:true" "$SENT_OK" "true"
+SENT_KIND="$(echo "$SENT_RESP" | jq -r '.item.kind')"
+assert_eq "/sent item kind=sent" "$SENT_KIND" "sent"
+SENT_URGENCY="$(echo "$SENT_RESP" | jq -r '.item.urgency')"
+assert_eq "/sent item urgency=low" "$SENT_URGENCY" "low"
+SENT_RESOLVED="$(echo "$SENT_RESP" | jq -r '.item.resolved')"
+assert_eq "/sent item resolved=true" "$SENT_RESOLVED" "true"
+SENT_PANE="$(echo "$SENT_RESP" | jq -r '.item.payload.paneId')"
+assert_eq "/sent item payload.paneId=%4" "$SENT_PANE" "%4"
+echo "  /sent creates sent item with kind=sent, urgency=low, resolved=true  ok"
+
+# /state should include the new sent item.
+SENT_IN_STATE="$(get_json /state | jq -r '[.items[] | select(.kind == "sent")] | length')"
+[[ "$SENT_IN_STATE" -ge 1 ]] || fail "/state should include the sent item, got $SENT_IN_STATE"
+echo "  /state contains kind:'sent' items  ok"
+
+# ---------- v0.3: POST /config/pane-override ----------
+OVERRIDE_RESP="$(post_json /config/pane-override '{"paneId": "%7"}')"
+OVERRIDE_OK="$(echo "$OVERRIDE_RESP" | jq -r '.ok')"
+assert_eq "/config/pane-override returns ok:true" "$OVERRIDE_OK" "true"
+OVERRIDE_PANE="$(echo "$OVERRIDE_RESP" | jq -r '.paneOverride')"
+assert_eq "/config/pane-override sets paneOverride=%7" "$OVERRIDE_PANE" "%7"
+echo "  /config/pane-override sets paneOverride  ok"
+
+# Round-trip through /state.
+STATE_OVERRIDE="$(get_json /state | jq -r '.config.paneOverride')"
+assert_eq "/state.config.paneOverride round-trip" "$STATE_OVERRIDE" "%7"
+echo "  /state.config.paneOverride round-trips  ok"
+
+# Round-trip through /protocol.
+PROTO_OVERRIDE="$(get_json /protocol | jq -r '.paneOverride')"
+assert_eq "/protocol.paneOverride round-trip" "$PROTO_OVERRIDE" "%7"
+echo "  /protocol.paneOverride round-trips  ok"
+
+# Clear the override.
+CLEAR_RESP="$(post_json /config/pane-override '{"paneId": null}')"
+CLEAR_PANE="$(echo "$CLEAR_RESP" | jq -r '.paneOverride')"
+assert_eq "/config/pane-override clears with null" "$CLEAR_PANE" "null"
+echo "  /config/pane-override clears with null  ok"
 
 echo ""
 echo "DOGFOOD OK"

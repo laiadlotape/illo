@@ -7,32 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
 
-- Resume context now includes `transcript_snapshot`, `project_name`, `git_branch`, and `agent_kind` in the `additionalContext` block injected by the `UserPromptSubmit` hook (#12).
-- Sidebar replies now route to a per-session resume file
-  (`pending_resume_<sessionId>.json`) so the correct Claude session consumes
-  the queued reply when multiple sessions are running. Items without a
-  `sessionId` fall back to the legacy global `pending_resume.json` for
-  back-compat (#9).
+## [0.3.0] - 2026-05-06
 
 ### Added
 
+- **Prompt-notepad TUI rework** (#18): the v0.3 illo TUI is a composition
+  surface, not a pending-items list. The screen splits into an event log
+  (top ~1/3, low-noise filter by default) and a compose buffer (~2/3) with a
+  full in-house editor (cursor motion, undo/redo with 2-second typing groups,
+  word/line kills, auto-indent on Enter).
+- **Tmux send integration**: `Ctrl-S` hands the composition off to the
+  Claude pane via `tmux send-keys -t <pane> -l --` (literal mode, never
+  auto-presses Enter). `Ctrl-D` is the same flow plus a final `Enter`.
+  Helpers live in `bin/_tmux.sh` and `bin/tmux-send.sh`; the TUI shells out
+  to them so the same logic is testable in isolation.
+- **Pane discovery**: on startup the TUI scans the current tmux window for
+  a pane whose foreground command is `claude` (or whose process tree
+  contains `claude`) and pre-populates the send target. Excludes its own
+  pane and other illo-tui panes to avoid feedback loops.
+- **`/sb-attach <pane_id>` and `/sb-detach`** slash commands: override or
+  clear the auto-detected pane via `POST /config/pane-override`.
+- **`POST /sent` endpoint** and **`sent` kind** in the protocol: the TUI
+  records every send so the event log shows what was handed off (and to
+  which pane). `sent` items are `urgency: low`, marked resolved + focused
+  immediately so they never re-warn.
+- **`paneOverride` daemon config**: persisted in `state.json`, broadcast
+  via the `config` WS message, exposed in `/state` and `/protocol`. Set
+  via `POST /config/pane-override`.
+- **`$EDITOR` escape (Ctrl-E)**: writes the buffer to `$TMPDIR`, suspends
+  raw mode and the alt-screen, runs `$EDITOR` (default `nano`), reads the
+  file back, pushes an undo snapshot, restores the TUI.
 - `.github/workflows/doc-drift.yml`: claude-code-action review on every PR for documentation drift (#19).
 - `.github/workflows/triage.yml`: auto-label and clarify newly-opened issues using claude-code-action (#20).
 - `.github/workflows/stale-prs.yml`: daily cron nag for PRs older than 7 days using claude-code-action (#21).
 - `.github/workflows/changelog-enforcer.yml`: PR gate — code changes must add an entry under CHANGELOG `[Unreleased]` (or include `[skip changelog]` in the PR body) (#22).
-- Enriched item context (project, git branch, cwd) on every Claude Code hook. Every item now carries `cwd`, `projectName`, `gitBranch`, and `gitWorktree` fields populated from the hook payload. The TUI agent-line renders as `<projectName> · <gitBranch> · <agentKind> · <session8>`, omitting any null fields (#6).
+- Enriched item context (project, git branch, cwd) on every Claude Code hook. Every item now carries `cwd`, `projectName`, `gitBranch`, and `gitWorktree` fields populated from the hook payload (#6).
 - `cwd`, `project_name`, `git_branch`, `git_worktree` keyword args added to Python and TypeScript SDK `.ask()`, `.notify()`, and `.custom()` methods.
 - `GET /resume-targets` endpoint: lists all currently-queued resume files so
   the TUI and other clients can surface delivery status.
-- Persistent post-reply toast in the TUI: after a sidebar reply or resume,
-  shows `queued · type anything in session <session8> to deliver` (or the
-  no-session variant) until the user presses any key.
+- Persistent post-reply toast in the legacy item-list TUI rendering path
+  (kept for back-compat) — superseded by the v0.3 prompt-notepad surface.
 
 ### Changed
 
-- Notification items now derive a meaningful title from the transcript snapshot when the raw message is a generic string such as "Claude is waiting for your input", "Waiting for your input", or "Claude needs your attention". The original generic title is preserved in `payload.original_title` (#6).
+- **Protocol bumped to 0.3.0**. Backward-compatible: every v0.1 and v0.2
+  envelope still produces the same items.
+- Plugin description updated: "CLI-native prompt notepad sidebar for
+  Claude Code (and any HITL agent framework). Compose deliberately, send
+  to the Claude pane via tmux without auto-pressing Enter."
+- `bin/illo-tui.js` rewritten end-to-end. Hand-rolled WebSocket client,
+  ANSI palette, port discovery, and `parseKey` are preserved; layout,
+  state, rendering, and key handling are new.
+- `/sb` (and `bin/open-sidebar.sh`) now print whether a claude pane was
+  detected when opening the split, hinting at `/sb-attach` if not.
+- Notification items derive a meaningful title from the transcript
+  snapshot when the raw message is a generic string ("Claude is waiting
+  for your input", "Waiting for your input", "Claude needs your
+  attention"). Original title preserved in `payload.original_title` (#6).
+
+### Fixed
+
+- Resume context now includes `transcript_snapshot`, `project_name`,
+  `git_branch`, and `agent_kind` in the `additionalContext` block
+  injected by the `UserPromptSubmit` hook (#12).
+- Sidebar replies route to a per-session resume file
+  (`pending_resume_<sessionId>.json`) so the correct Claude session
+  consumes the queued reply when multiple sessions are running. Items
+  without a `sessionId` fall back to the legacy global
+  `pending_resume.json` for back-compat (#9).
 
 
 ## [0.2.0] - 2026-05-06
@@ -96,6 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Click-to-resume: "resume here" button writes `pending_resume.json`; the
   `UserPromptSubmit` hook injects context into the next Claude turn.
 
-[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/laiadlotape/illo/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/laiadlotape/illo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/laiadlotape/illo/releases/tag/v0.1.0

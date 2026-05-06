@@ -1,20 +1,41 @@
-# illo-sidebar — deliberate-prompting workbench for Claude Code (and any HITL agent)
+# illo-sidebar — v0.3 — deliberate-prompting workbench for Claude Code (and any HITL agent)
 
-![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.2.0-f7b955)
+![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.3.0-f7b955)
 
-A Claude Code plugin (and standalone local daemon) that surfaces every moment
-any agent is waiting on you — questions, permission prompts, idle stops — in a
-persistent sidebar. The default surface is a CLI-native TUI that opens in a
-tmux split. Pins items so they don't get buried in scrollback. Re-warns on a
-configurable cadence. Lets you reply, resume, snooze, or filter from the
-terminal (or, optionally, from the browser via `/sb-web`).
+A Claude Code plugin (and standalone local daemon) whose default surface is a
+**prompt notepad** that lives in a tmux split next to the Claude pane. Compose
+your prompt deliberately, review it twice, then hand it off to Claude via
+`tmux send-keys` — without auto-pressing Enter. The notepad also tails the
+agent's pending-input events (questions, notifications, sends) so you can see
+what Claude is waiting on without context-switching.
 
-In v0.2 the daemon is a **generic agent inbox**: any agent framework can push
-events to it over a simple HTTP JSON protocol.
+> Why a notepad? "Never prompt directly in chat. Write in an editor, read it
+> twice, dehumanize it. You are configuring a system, not chatting with a
+> colleague." — *FindingMemo*
+
+A browser fallback (`/sb-web`) is still available for headless / remote use.
 
 ---
 
-## What's new in v0.2
+## What's new in v0.3
+
+- **Prompt-notepad TUI** (default surface): events log on top (~1/3),
+  full-feature compose buffer below (~2/3) with an in-house editor (cursor
+  motion, undo/redo, word/line kills, auto-indent on Enter).
+- **`Ctrl-S` sends to the claude pane** via `tmux send-keys -l` (literal
+  text, no auto-Enter — the human reads once more in the destination pane
+  and submits). `Ctrl-D` is "send + Enter" for when you've already
+  re-read.
+- **`Ctrl-E` opens `$EDITOR`** for long compositions; the buffer round-trips
+  through a tmp file.
+- **Auto-detection of the claude pane** in the current tmux window. Override
+  with `/sb-attach <pane_id>`, clear with `/sb-detach`.
+- **`POST /sent` + `sent` kind** in the protocol: every send is recorded in
+  the event log so you can scroll back.
+- **`paneOverride` daemon config**: persisted, broadcast over WS, exposed in
+  `/state` and `/protocol`.
+
+## What's still here from v0.2
 
 - **CLI-native TUI sidebar** (default) — opens in a tmux split via `/sb`.
   Browser UI moved to optional `/sb-web` fallback.
@@ -164,7 +185,9 @@ This path is optimised for short corrective replies. The default workflow is **c
 
 ## Quick start
 
-1. Open a Claude Code session in any project.
+1. Open a Claude Code session **inside a tmux window** (the prompt notepad
+   needs a tmux pane to send to). Make sure your `claude` session is the
+   foreground command of one of the panes.
 
 2. Run the slash command to open the sidebar:
 
@@ -172,24 +195,32 @@ This path is optimised for short corrective replies. The default workflow is **c
    /sb
    ```
 
-   The daemon starts automatically. **Inside tmux:** a 40%-wide vertical split
-   opens on the right running the TUI. Use `j`/`k` to navigate, `Enter` to
-   resume, `r` to reply, `s` to snooze, `a` to acknowledge, `x` to dismiss,
-   `q` to quit. Full keybinding table at `docs/tui.md`.
+   **Inside tmux:** a 40%-wide vertical split opens on the right running the
+   prompt-notepad TUI. The status bar shows the auto-detected pane id
+   (e.g. `pane: %4`). Switch to it with `Prefix → o`.
 
-   **Outside tmux:** the command prints clear guidance — start tmux and re-run
-   `/sb`, launch the TUI manually with
+   **Compose** your prompt in the lower box. `Ctrl-S` sends it (literal
+   text) into the claude pane and focuses the pane so you can re-read and
+   submit. `Ctrl-D` does the same plus auto-Enter. `Ctrl-E` opens
+   `$EDITOR` for longer drafts. `Ctrl-Q` quits. Full keybinding table at
+   `docs/tui.md`.
+
+   The **events log** at the top tails Claude's pending-input items
+   (questions, notifications, your past sends). Press `Ctrl-Up` to focus
+   it, `j`/`k` to scroll, `v` to flip between low-noise and verbose,
+   `Enter` to open a detail modal, `Ctrl-Down` to return to compose.
+
+   **Outside tmux:** the command prints clear guidance — start tmux and
+   re-run `/sb`, launch the TUI manually with
    `node "$CLAUDE_PLUGIN_ROOT/bin/illo-tui.js"`, or use `/sb-web` for the
    browser fallback.
 
-3. Ask Claude to do a multi-step task that triggers `AskUserQuestion` — e.g.
-   "refactor this directory and ask me before deleting anything".
+3. If auto-detection picks the wrong claude pane (or none), pin one with
+   `/sb-attach %N`. `/sb-detach` returns to auto-detection.
 
-4. When Claude calls `AskUserQuestion`, the sidebar receives a WebSocket
-   `item:add` message and renders the question card. A warn animation plays.
-
-5. Reply inline (`r` in the TUI, or the quick-reply textarea in `/sb-web`) or
-   select "resume here" and type your answer in the Claude CLI.
+4. Ask Claude to do a multi-step task that triggers `AskUserQuestion`. The
+   event log shows the question; compose your reply in the notepad and
+   `Ctrl-S` it into the claude pane.
 
 **Push a fake event for testing (no Claude required):**
 
@@ -206,17 +237,19 @@ curl -sX POST -H 'Content-Type: application/json' \
 
 | Command | What it does |
 |---|---|
-| `/sb` | Opens the TUI in a tmux split (or guides you to open it). Default sidebar surface. |
+| `/sb` | Opens the prompt-notepad TUI in a tmux split (or guides you to open it). Default sidebar surface. |
 | `/sb-tui` | Alias for `/sb`. |
-| `/sb-web` | Opens the browser UI fallback (~420 px wide window). Use when you can't use tmux or prefer the GUI. |
+| `/sb-attach <pane_id>` | Override the auto-detected claude pane. Use when detection picks the wrong pane (or you have multiple claude sessions). Example: `/sb-attach %4`. |
+| `/sb-detach` | Clear the pane override and return to auto-detection. |
+| `/sb-web` | Opens the browser UI fallback (~420 px wide window). Use when you can't use tmux or prefer the GUI. The browser surface still uses the v0.2 list view; prompt-notepad parity is tracked separately. |
 | `/sb-resume [item_id]` | With no argument, lists all unresolved items. With an id, marks it as the resume target. |
 | `/sb-status` | Prints daemon port, healthz response, total item count, and unresolved count. |
 
 Example `/sb-status` output:
 
 ```
-daemon port: 7821  {"ok":true,"version":"0.2.0"}
-config: { warnIntervalSeconds: 300, warnStyle: 'pulse' }
+daemon port: 7821  {"ok":true,"version":"0.3.0"}
+config: { warnIntervalSeconds: 300, warnStyle: 'pulse', paneOverride: null }
 total items: 6  pending: 2
 ```
 
@@ -556,11 +589,14 @@ optional; the daemon fills sensible defaults. New fields in v0.2: `agent_id`,
 ```
 illo/
 ├── .claude-plugin/
-│   └── plugin.json          # manifest, userConfig schema (v0.2)
+│   ├── plugin.json          # manifest, userConfig schema (v0.3)
+│   └── marketplace.json     # local marketplace entry (v0.3)
 ├── bin/
-│   ├── illo-tui.js          # CLI-native TUI sidebar (default surface)
-│   ├── open-sidebar.sh      # TUI router: tmux split or guidance (used by /sb)
+│   ├── illo-tui.js          # v0.3 prompt-notepad TUI (default surface)
+│   ├── open-sidebar.sh      # TUI router: tmux split + claude-pane discovery
 │   ├── open-sidebar-web.sh  # browser fallback launcher (used by /sb-web)
+│   ├── _tmux.sh             # tmux helpers (sourced): pane discovery + send-keys
+│   ├── tmux-send.sh         # CLI wrapper around _tmux.sh (used by the TUI)
 │   ├── _lib.sh              # shared helpers: daemon_port, ensure_daemon, push_event
 │   ├── _snapshot.sh         # transcript snapshot helpers
 │   ├── on-ask-user.sh       # PreToolUse AskUserQuestion → POST /event ask_user
@@ -574,7 +610,7 @@ illo/
 │   ├── notify-tray.sh       # desktop tray notification helper
 │   ├── start-daemon.sh      # explicit daemon start helper
 │   ├── illo-demo.sh         # scripted demo runner
-│   ├── illo-vcr.sh          # VCR record/replay CLI (quoting bug fixed; replays produce valid JSON)
+│   ├── illo-vcr.sh          # VCR record/replay CLI
 │   └── demo-scenarios/
 │       ├── typical.jsonl    # 5-step typical session
 │       ├── multi-agent.jsonl # multi-agent interleaved scenario
@@ -582,6 +618,8 @@ illo/
 ├── commands/
 │   ├── sb.md                # /sb (TUI default)
 │   ├── sb-tui.md            # alias for /sb
+│   ├── sb-attach.md         # /sb-attach <pane_id> — override claude-pane discovery
+│   ├── sb-detach.md         # /sb-detach — clear the override
 │   ├── sb-web.md            # /sb-web browser fallback
 │   ├── sb-resume.md         # /sb-resume slash command
 │   └── sb-status.md         # /sb-status slash command
@@ -604,9 +642,11 @@ illo/
 │       └── SKILL.md         # guidance for Claude on resume flow
 ├── tests/
 │   ├── server.test.mjs      # node:test unit tests (in-process)
-│   ├── dogfood.sh           # HTTP integration smoke test
+│   ├── dogfood.sh           # HTTP integration smoke test (incl. /sent + paneOverride)
 │   ├── sdk_python.test.sh   # Python SDK integration test
 │   ├── integration.test.sh  # demo + VCR integration smoke test
+│   ├── tui.test.sh          # TUI smoke test (--no-tty headless mode)
+│   ├── tmux-helper.test.sh  # bin/_tmux.sh + bin/tmux-send.sh shape tests
 │   ├── ux.spec.js           # Playwright E2E tests (v0.1 + v0.2 UI)
 │   ├── _helper.mjs          # test env setup helper
 │   ├── playwright.config.js # Playwright configuration

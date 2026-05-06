@@ -124,6 +124,54 @@ else
   echo "  (note: ask_user title not found in --no-tty output — may be filtered)"
 fi
 
+# v0.3: --no-tty snapshot should include the new fields.
+if grep -q '"eventFilter"' "$TUI_OUT"; then
+  pass "TUI --no-tty snapshot has eventFilter field"
+else
+  fail "TUI --no-tty snapshot missing eventFilter field"
+fi
+
+if grep -q '"paneId"' "$TUI_OUT"; then
+  pass "TUI --no-tty snapshot has paneId field"
+else
+  fail "TUI --no-tty snapshot missing paneId field"
+fi
+
+if grep -q '"composeLines"' "$TUI_OUT"; then
+  pass "TUI --no-tty snapshot has composeLines field"
+else
+  fail "TUI --no-tty snapshot missing composeLines field"
+fi
+
+# Default filter should be low-noise. Stop event was posted earlier? Not in this test.
+# Check the filter value.
+LAST_FILTER=$(grep '"eventFilter"' "$TUI_OUT" | tail -1 | grep -o '"eventFilter":"[a-z-]*"' | cut -d'"' -f4)
+if [[ "$LAST_FILTER" == "low-noise" ]]; then
+  pass "TUI --no-tty default eventFilter is 'low-noise'"
+else
+  fail "Expected eventFilter='low-noise', got: '$LAST_FILTER'"
+fi
+
+# Post a stop event. Under low-noise filter it should NOT appear in events list.
+curl -sS -m 2 -X POST -H 'Content-Type: application/json' \
+  -d '{"kind":"stop","session_id":"test-1"}' \
+  "http://127.0.0.1:${PORT}/event" >/dev/null
+
+# Wait for snapshot to refresh
+sleep 0.5
+
+# Verify low-noise filter excludes 'stop' (not in {ask_user, notification, sent}).
+LAST_LINE=$(tail -1 "$TUI_OUT")
+# set -o pipefail + set -e: grep -o that finds nothing exits 1, killing the
+# pipeline. Use `|| true` so a no-match counts as 0 cleanly.
+STOP_IN_EVENTS=$(echo "$LAST_LINE" | grep -o '"kind":"stop"' | wc -l || true)
+STOP_IN_EVENTS=${STOP_IN_EVENTS:-0}
+if [[ "$STOP_IN_EVENTS" -eq 0 ]]; then
+  pass "TUI low-noise filter excludes 'stop' kind events"
+else
+  fail "Expected stop kind to be filtered out under low-noise, but appeared: $LAST_LINE"
+fi
+
 # ── 5. Send EOF to TUI — assert it exits 0 ───────────────────────────────────
 # TUI reads stdin; closing it triggers exit in --no-tty mode
 # We kill stdin by sending EOF via the process group

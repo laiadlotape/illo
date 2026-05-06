@@ -29,7 +29,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 
-const PROTOCOL_VERSION = '0.2.0';
+const PROTOCOL_VERSION = '0.3.0';
 const SUPPORTED_KINDS = [
   'ask_user',
   'notification',
@@ -39,6 +39,7 @@ const SUPPORTED_KINDS = [
   'ask_user_answered',
   'user_prompt',
   'custom',
+  'sent',
 ];
 const SUPPORTED_AGENT_KINDS = [
   'claude-code',
@@ -196,6 +197,10 @@ const state = {
   config: {
     warnIntervalSeconds: DEFAULT_WARN_INTERVAL_S,
     warnStyle: process.env.ILLO_SIDEBAR_WARN_STYLE || 'pulse',
+    // v0.3 prompt-notepad: TUI consults this to skip auto-discovery and target
+    // a specific tmux pane id (e.g. "%4"). null = auto-discover. Set via
+    // POST /config/pane-override.
+    paneOverride: null,
     // Mobile push config — OFF by default. User must explicitly enable.
     // See docs/push.md for setup instructions.
     push: {
@@ -232,6 +237,13 @@ function restore() {
       }
       const { push: _push, ...rest } = parsed.config;
       Object.assign(state.config, rest);
+      // Defensive: paneOverride may legitimately be a string ("%4") or null.
+      if (
+        state.config.paneOverride !== null &&
+        typeof state.config.paneOverride !== 'string'
+      ) {
+        state.config.paneOverride = null;
+      }
     }
     if (Array.isArray(parsed?.items)) {
       for (const it of parsed.items) state.items.set(it.id, it);
@@ -486,6 +498,37 @@ function ingest(evt) {
           quickReplyEnabled: env.quickReplyEnabled,
         })
       );
+      break;
+    }
+    case 'sent': {
+      // v0.3 prompt-notepad: TUI records every composition handed off to the
+      // claude pane. Marked low-urgency, resolved (no-action), so it shows up
+      // in the event log without ever triggering a re-warn.
+      const rawText = typeof evt.text === 'string' ? evt.text : '';
+      const lines = rawText.split('\n');
+      const title = (lines[0] || '(empty)').slice(0, 80);
+      const tail = lines.slice(1).join(' / ');
+      const payload = {
+        text: rawText,
+        paneId: typeof evt.paneId === 'string' ? evt.paneId : null,
+      };
+      const item = makeItem({
+        kind: 'sent',
+        sessionId: env.sessionId,
+        title,
+        snippet: tail,
+        payload,
+        agentId: env.agentId,
+        agentKind: env.agentKind,
+        urgency: 'low',
+        transcriptSnapshot: env.transcriptSnapshot,
+        quickReplyEnabled: false,
+      });
+      // 'sent' items are informational — never re-warned, never pending.
+      item.resolved = true;
+      item.resolvedAt = Date.now();
+      item.focused = true;
+      createdItem = addItem(item);
       break;
     }
     case 'ask_user_answered': {
@@ -848,8 +891,10 @@ const server = http.createServer(async (req, res) => {
           { method: 'GET', path: '/stats' },
           { method: 'GET', path: '/resume-targets' },
           { method: 'POST', path: '/event' },
+          { method: 'POST', path: '/sent' },
           { method: 'POST', path: '/config' },
           { method: 'POST', path: '/config/push' },
+          { method: 'POST', path: '/config/pane-override' },
           { method: 'POST', path: '/items/:id/focus' },
           { method: 'POST', path: '/items/:id/resume' },
           { method: 'POST', path: '/items/:id/reply' },
@@ -864,6 +909,7 @@ const server = http.createServer(async (req, res) => {
           { method: 'WS', path: '/ws' },
         ],
         history_backend: historyKind,
+        paneOverride: state.config.paneOverride,
       });
     }
     if (url.pathname === '/state' && req.method === 'GET') {
@@ -881,6 +927,38 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const item = ingest(body);
       return json(res, 200, { ok: true, item });
+    }
+    // POST /sent — convenience wrapper used by the v0.3 prompt-notepad TUI
+    // after handing a composition off to the claude pane via tmux send-keys.
+    // Accepts { text, paneId?, sessionId? }; produces a kind:'sent' item.
+    if (url.pathname === '/sent' && req.method === 'POST') {
+      const body = await readJson(req);
+      const text = typeof body?.text === 'string' ? body.text : '';
+      const paneId = typeof body?.paneId === 'string' ? body.paneId : null;
+      const sessionId = typeof body?.session_id === 'string'
+        ? body.session_id
+        : (typeof body?.sessionId === 'string' ? body.sessionId : null);
+      const item = ingest({
+        kind: 'sent',
+        text,
+        paneId,
+        session_id: sessionId,
+        agent_kind: typeof body?.agent_kind === 'string' ? body.agent_kind : 'claude-code',
+      });
+      return json(res, 200, { ok: true, item });
+    }
+    // POST /config/pane-override — sets/clears the pane id the TUI sends to.
+    // Body: { paneId: string|null }. Persisted to state.json.
+    if (url.pathname === '/config/pane-override' && req.method === 'POST') {
+      const body = await readJson(req);
+      let paneId = null;
+      if (typeof body?.paneId === 'string' && body.paneId.length > 0) {
+        paneId = body.paneId;
+      }
+      state.config.paneOverride = paneId;
+      persist();
+      broadcast({ type: 'config', config: state.config });
+      return json(res, 200, { ok: true, paneOverride: state.config.paneOverride });
     }
     if (url.pathname === '/config' && req.method === 'POST') {
       const body = await readJson(req);
