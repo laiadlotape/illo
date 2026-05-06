@@ -1,4 +1,4 @@
-# illo-sidebar protocol — v0.2.0
+# illo-sidebar protocol — v0.3.0
 
 The illo-sidebar daemon is a **generic agent inbox**. Any agent framework
 (Claude Code, LangGraph, CrewAI, OpenAI Codex, Aider, Cursor, OpenAI Agents
@@ -20,7 +20,8 @@ target this contract.
 | Protocol | Daemon | Hooks compatibility |
 |---|---|---|
 | `0.1.0` | original v0.1 envelope | preserved — every v0.1 event still produces an identical item |
-| `0.2.0` | this document | new envelope is a strict superset |
+| `0.2.0` | generic-inbox envelope | strict superset of v0.1 |
+| `0.3.0` | this document | adds `sent` kind, `POST /sent`, `POST /config/pane-override`, `paneOverride` config — all backward-compatible |
 
 `GET /protocol` returns the live version and supported enums so SDKs can
 negotiate.
@@ -34,7 +35,7 @@ Every event is a JSON object with the following fields. All fields except
 
 ```jsonc
 {
-  "kind":            "ask_user|notification|stop|session_start|session_end|ask_user_answered|user_prompt|custom|heartbeat",
+  "kind":            "ask_user|notification|stop|session_start|session_end|ask_user_answered|user_prompt|custom|sent|heartbeat",
   "agent_id":        "string  (e.g. 'claude-code:abc123', 'langgraph:graph-7', 'codex:run-99')",
   "agent_kind":      "claude-code|langgraph|crewai|codex|aider|cursor|openai-agents|generic",
   "session_id":      "string  (optional; used to group items and to resolve ask_user_answered)",
@@ -62,6 +63,7 @@ Every event is a JSON object with the following fields. All fields except
 | `ask_user` | Creates an item. Title derived from `tool_input.questions[0].question` (truncated to 80 chars) unless `title` is provided. Snippet lists the options. |
 | `notification` | Creates an item. Title is `message` (truncated to 100 chars) unless `title` is provided. If the title is a generic string (see "Smart title derivation for notifications" below), the daemon will attempt to derive a more useful title from `transcript_snapshot`. |
 | `custom` | Creates an item. Title and snippet come from the envelope (`title`, `snippet`); `payload` is preserved verbatim. Use this for any framework-specific event the daemon doesn't natively understand. |
+| `sent` | Creates an informational item recording a prompt the human handed off to the agent pane (typically via the v0.3 illo TUI's `Ctrl-S`). Marked `urgency: low`, `resolved: true`, `focused: true` immediately — never re-warns. Title is the first line of `text` (truncated to 80 chars); snippet is remaining lines joined with ` / `; `payload.text` carries the full text and `payload.paneId` records the destination pane. Convenience endpoint `POST /sent` wraps the same path. |
 | `ask_user_answered` | Resolves the most recent unresolved `ask_user` item for the matching `session_id`. Creates no new item. |
 | `user_prompt` | Resolves any unresolved `idle` items in this session. Creates no new item. |
 | `session_start` / `session_end` / `stop` | Updates session state; creates no item. Broadcast as `{type:"session"}` to UI. |
@@ -77,7 +79,7 @@ the `item:add` / `item:update` WS messages:
 ```jsonc
 {
   "id":              "itm_<sha1-12>",
-  "kind":            "ask_user|notification|custom|idle",
+  "kind":            "ask_user|notification|custom|idle|sent",
   "subkind":         "string|null",
   "sessionId":       "string|null",
   "agentId":         "string|null",
@@ -124,12 +126,14 @@ The original (generic) title is always preserved in `payload.original_title` so 
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/healthz` | Liveness check, returns `{"ok":true,"version":"0.2.0"}` |
-| `GET` | `/protocol` | Protocol metadata: version, supported `kind`s, `agent_kind`s, `urgency` values, endpoint list, history backend |
-| `GET` | `/state` | Full snapshot: `{config, items[]}` |
+| `GET` | `/healthz` | Liveness check, returns `{"ok":true,"version":"0.3.0"}` |
+| `GET` | `/protocol` | Protocol metadata: version, supported `kind`s, `agent_kind`s, `urgency` values, endpoint list, history backend, `paneOverride` |
+| `GET` | `/state` | Full snapshot: `{config, items[]}`. `config.paneOverride` carries the v0.3 TUI pane target. |
 | `GET` | `/stats?days=7` | Aggregate stats over the last N days (default 7) — see below |
 | `POST` | `/event` | Ingest an event (see envelope above) |
+| `POST` | `/sent` | v0.3 convenience: body `{text, paneId?, session_id?, agent_kind?}` → creates a `kind:'sent'` item. Identical to posting `{kind:'sent', ...}` to `/event`. |
 | `POST` | `/config` | Update `warnIntervalSeconds` / `warnStyle` live |
+| `POST` | `/config/pane-override` | Body `{paneId: string|null}`. Sets/clears the pane id the v0.3 TUI sends to. Persisted to `state.json`; broadcast as `config` over WS. Empty string → clears. |
 | `POST` | `/items/:id/focus` | Mark item focused (suppresses re-warn) |
 | `POST` | `/items/:id/resume` | Write per-session `pending_resume_<sessionId>.json` (or global `pending_resume.json` if item has no `sessionId`), mark focused. Response includes `resumeFile` path. |
 | `POST` | `/items/:id/reply` | Body `{"text": "..."}`. Writes per-session `pending_resume_<sessionId>.json` (or global fallback) with `user_reply_text`, marks item `replied: true, resolved: true, focused: true`. Fails 400 if `quickReplyEnabled === false`. Response includes `resumeFile` and `sessionId`. |
@@ -189,6 +193,20 @@ block. The `transcript_snapshot` is capped to the last 80 lines and indented
 
 `GET /resume-targets` lists all currently-queued resume files so the TUI can
 surface delivery hints to the user.
+
+### `paneOverride` config (v0.3)
+
+`state.config.paneOverride` is a string (a tmux pane id like `"%4"`) or
+`null`. The v0.3 illo TUI consults this on startup and on every `config`
+broadcast:
+
+- If non-null, the TUI uses it directly as the send target — no auto-discovery.
+- If null, the TUI runs `bin/tmux-send.sh discover` (which delegates to
+  `tmux list-panes` for the current window) and uses the first pane whose
+  current command is `claude` or whose process tree contains `claude`.
+
+Set via `POST /config/pane-override` (typically from the `/sb-attach`
+slash command). Cleared by passing `{"paneId": null}`.
 
 ### Re-warn cadence
 

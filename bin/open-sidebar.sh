@@ -5,11 +5,17 @@ set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
 source "$DIR/_lib.sh"
+# shellcheck source=_tmux.sh
+source "$DIR/_tmux.sh"
 
 ensure_daemon || true
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$DIR/.." && pwd)}"
 TUI_SCRIPT="$PLUGIN_ROOT/bin/illo-tui.js"
+
+# v0.3: detect the claude pane up front so the TUI can pre-populate paneId.
+# tmux_find_claude_pane is a no-op (empty + exit 0) outside tmux.
+CLAUDE_PANE="$(tmux_find_claude_pane || true)"
 
 if [[ -n "${TMUX:-}" ]]; then
   # Inside tmux: look for an existing illo-tui pane to avoid duplicates.
@@ -49,6 +55,13 @@ if [[ -n "${TMUX:-}" ]]; then
   NEW_PANE=$(tmux display-message -p "#{pane_id}" 2>/dev/null || true)
   # select-pane -T sets the pane title (tmux 3.0+)
   tmux select-pane -T 'illo' -t "${NEW_PANE}" 2>/dev/null || true
+
+  # v0.3: hint at the discovered claude pane.
+  if [[ -n "$CLAUDE_PANE" ]]; then
+    echo "illo: claude pane detected at $CLAUDE_PANE"
+  else
+    echo "illo: no claude pane detected in this window — TUI will guide /sb-attach"
+  fi
   exit 0
 fi
 

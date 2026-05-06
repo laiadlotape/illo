@@ -1,7 +1,7 @@
 {
   "name": "illo-sidebar",
-  "description": "CLI-native sidebar (TUI in a tmux split, browser fallback) that surfaces every moment Claude is waiting on you (questions, permission prompts, idle stops) so they don't get buried in scrollback. Gentle re-warn cadence, focus-clears-warn, click/keyboard-to-resume.",
-  "version": "0.2.0",
+  "description": "CLI-native prompt notepad sidebar for Claude Code (and any HITL agent framework). Compose deliberately, send to the Claude pane via tmux without auto-pressing Enter.",
+  "version": "0.3.0",
   "author": { "name": "illo" },
   "license": "MIT",
   "homepage": "https://github.com/lotape6/illo-sidebar",

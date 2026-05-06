@@ -24,6 +24,22 @@ import { __test, tmpDir } from './_helper.mjs';
 
 const { state, ingest, snapshot, addItem, updateItem, computeStats, historyAppend, PROTOCOL_VERSION, vcrState, pushReplyTokens, resumeFilePath, listResumeTargets, STATE_DIR, RESUME_FILE } = __test;
 
+// Wait for the daemon's listen callback to have written daemon.port. Returns
+// the parsed port. Times out after ~3 seconds so a real failure is still loud.
+async function waitForPort() {
+  const portFile = path.join(STATE_DIR, 'daemon.port');
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    try {
+      const raw = fs.readFileSync(portFile, 'utf8').trim();
+      const port = parseInt(raw, 10);
+      if (Number.isFinite(port) && port > 0) return port;
+    } catch { /* not yet written */ }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error('daemon.port file never appeared in ' + STATE_DIR);
+}
+
 // Reset in-memory state before each test so tests are independent.
 beforeEach(() => {
   state.items.clear();
@@ -344,9 +360,159 @@ describe('computeStats from history sink', () => {
 
 // ---------- protocol metadata ----------
 describe('protocol metadata', () => {
-  it('exports PROTOCOL_VERSION 0.2.x', () => {
+  it('exports PROTOCOL_VERSION 0.3.x', () => {
     assert.ok(typeof PROTOCOL_VERSION === 'string');
-    assert.ok(PROTOCOL_VERSION.startsWith('0.2.'), `expected 0.2.x, got ${PROTOCOL_VERSION}`);
+    assert.ok(PROTOCOL_VERSION.startsWith('0.3.'), `expected 0.3.x, got ${PROTOCOL_VERSION}`);
+  });
+});
+
+// ---------- v0.3: sent kind ----------
+describe('v0.3 sent kind', () => {
+  it('ingest kind:sent creates an item with kind=sent, urgency=low, resolved=true, focused=true', () => {
+    const item = ingest({
+      kind: 'sent',
+      session_id: 's-sent-1',
+      text: 'Hello, please look at the migration script.',
+      paneId: '%4',
+    });
+    assert.ok(item, 'sent ingest should return an item');
+    assert.equal(item.kind, 'sent');
+    assert.equal(item.urgency, 'low');
+    assert.equal(item.resolved, true, 'sent items should be auto-resolved');
+    assert.ok(item.resolvedAt !== null, 'resolvedAt should be set');
+    assert.equal(item.focused, true);
+    assert.equal(item.quickReplyEnabled, false, 'quick reply makes no sense for sent items');
+    assert.ok(item.title.includes('Hello'), `title should be derived from text first line, got: "${item.title}"`);
+    assert.equal(item.payload.text, 'Hello, please look at the migration script.');
+    assert.equal(item.payload.paneId, '%4');
+  });
+
+  it('ingest kind:sent with multi-line text puts remaining lines in snippet', () => {
+    const item = ingest({
+      kind: 'sent',
+      text: 'first line\nsecond\nthird',
+    });
+    assert.equal(item.title, 'first line');
+    assert.ok(item.snippet.includes('second'));
+    assert.ok(item.snippet.includes('third'));
+  });
+
+  it('ingest kind:sent truncates first line to 80 chars for title', () => {
+    const long = 'a'.repeat(200);
+    const item = ingest({ kind: 'sent', text: long });
+    assert.ok(item.title.length <= 80, `title length should be <= 80, got ${item.title.length}`);
+  });
+
+  it('POST /sent endpoint creates a sent item', async () => {
+    const port = await waitForPort();
+    const body = JSON.stringify({ text: 'sent via endpoint', paneId: '%7', session_id: 'ep-sess' });
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1', port, method: 'POST', path: '/sent',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+            catch (e) { reject(e); }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    assert.equal(result.ok, true, '/sent should return ok:true');
+    assert.ok(result.item, '/sent should return an item');
+    assert.equal(result.item.kind, 'sent');
+    assert.equal(result.item.payload.paneId, '%7');
+    assert.equal(result.item.sessionId, 'ep-sess');
+  });
+});
+
+// ---------- v0.3: paneOverride config ----------
+describe('v0.3 paneOverride config', () => {
+  it('paneOverride defaults to null', () => {
+    // Reset to the default by not having anything set
+    state.config.paneOverride = null;
+    assert.equal(state.config.paneOverride, null);
+  });
+
+  it('POST /config/pane-override sets paneOverride', async () => {
+    const port = await waitForPort();
+    const body = JSON.stringify({ paneId: '%9' });
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1', port, method: 'POST', path: '/config/pane-override',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+            catch (e) { reject(e); }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.paneOverride, '%9');
+    assert.equal(state.config.paneOverride, '%9', 'in-memory state should reflect the override');
+  });
+
+  it('POST /config/pane-override with paneId:null clears the override', async () => {
+    const port = await waitForPort();
+    // Pre-set
+    state.config.paneOverride = '%99';
+    const body = JSON.stringify({ paneId: null });
+    const result = await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1', port, method: 'POST', path: '/config/pane-override',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+            catch (e) { reject(e); }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.paneOverride, null);
+    assert.equal(state.config.paneOverride, null);
+  });
+
+  it('paneOverride round-trips via /state', async () => {
+    const port = await waitForPort();
+    state.config.paneOverride = '%12';
+    const data = await new Promise((resolve, reject) => {
+      const req = http.get(`http://127.0.0.1:${port}/state`, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+          catch (e) { reject(e); }
+        });
+      });
+      req.on('error', reject);
+    });
+    assert.equal(data.config.paneOverride, '%12');
+    state.config.paneOverride = null;
   });
 });
 
