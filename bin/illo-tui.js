@@ -30,6 +30,15 @@ import { createHash } from 'node:crypto';
 // ─── args ────────────────────────────────────────────────────────────────────
 const NO_TTY = process.argv.includes('--no-tty');
 
+// ─── constants ────────────────────────────────────────────────────────────────
+// Word-aware wrap: if backing up to a whitespace boundary would leave a
+// trailing gap wider than (1 - WORD_HARD_BREAK_RATIO) * innerCols we give up
+// and hard-break instead (handles very long URLs / identifiers).
+const WORD_HARD_BREAK_RATIO = 0.8;
+
+// Bracketed paste cap (bytes)
+const PASTE_MAX_BYTES = 1024 * 1024;
+
 // ─── plugin root + tmux helper ───────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,8 +64,10 @@ const CSI = `${ESC}[`;
 
 function moveTo(row, col) { return `${CSI}${row};${col}H`; }
 function clearScreen() { return `${CSI}2J`; }
-function altScreenOn()  { return `${CSI}?1049h`; }
-function altScreenOff() { return `${CSI}?1049l`; }
+function altScreenOn()      { return `${CSI}?1049h`; }
+function altScreenOff()     { return `${CSI}?1049l`; }
+function bracketedPasteOn() { return `${CSI}?2004h`; }
+function bracketedPasteOff(){ return `${CSI}?2004l`; }
 function hideCursor()   { return `${CSI}?25l`; }
 function showCursor()   { return `${CSI}?25h`; }
 function resetAttrs()   { return `${CSI}0m`; }
@@ -132,6 +143,38 @@ function wrapText(text, width) {
     }
   }
   return out;
+}
+
+// Word-aware line wrapper for compose pane (single logical line → visual rows).
+// Does NOT split on '\n' — callers must handle multi-line text first.
+// Export-friendly: referenced by tests/tui-units.test.mjs.
+export function wrapLogicalLine(line, innerCols) {
+  if (!line || line.length === 0) return [''];
+  if (line.length <= innerCols) return [line];
+  const rows = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line.length - i <= innerCols) {
+      rows.push(line.slice(i));
+      break;
+    }
+    const hardLimit = i + innerCols;
+    // Search backwards from hardLimit for the last whitespace in [i, hardLimit).
+    let breakAt = -1;
+    for (let j = hardLimit - 1; j >= i; j--) {
+      if (/\s/.test(line[j])) { breakAt = j; break; }
+    }
+    // Use whitespace break only if it doesn't eat more than
+    // (1 - WORD_HARD_BREAK_RATIO) of the line width as trailing space.
+    if (breakAt !== -1 && (hardLimit - breakAt) <= innerCols * (1 - WORD_HARD_BREAK_RATIO)) {
+      rows.push(line.slice(i, breakAt));
+      i = breakAt + 1; // consume the whitespace char
+    } else {
+      rows.push(line.slice(i, hardLimit));
+      i = hardLimit;
+    }
+  }
+  return rows.length > 0 ? rows : [''];
 }
 
 // ─── terminal size ────────────────────────────────────────────────────────────
@@ -266,6 +309,7 @@ const appState = {
   toast: null,        // { text, expiresAt }
   modal: null,        // { type:'event-detail', eventId } | { type:'message', text }
   eventDetail: null,  // { itemId, scroll } | null
+  pasteBuffer: null,  // string | null — accumulates bracketed paste content
 };
 
 // ─── compose helpers ──────────────────────────────────────────────────────────
@@ -777,42 +821,34 @@ function render() {
 
   if (c.wrap) {
     // ── wrap mode ────────────────────────────────────────────────────────
-    // Build visual rows: each logical line wraps at innerCols.
-    // We need to know the visual row of the cursor to scroll correctly.
-    const wrapWidth = innerCols;
-
-    // Count visual rows for a logical line
-    function visualRowsForLine(line) {
-      if (line.length === 0) return 1;
-      return Math.ceil(line.length / wrapWidth);
-    }
-
-    // Map logical (logRow, logCol) → visual row offset from the start of
-    // logical line's visual rows, and visual col within that row.
-    function logicalToVisual(logRow, logCol) {
-      const vRow = Math.floor(logCol / wrapWidth);
-      const vCol = logCol % wrapWidth;
-      return { vRow, vCol };
-    }
-
-    // Calculate the absolute visual row of (logRow, logCol) across all lines.
-    function absoluteVisualRow(logRow, logCol) {
-      let abs = 0;
-      for (let i = 0; i < logRow; i++) {
-        abs += visualRowsForLine(c.lines[i] || '');
+    // Build visual rows using word-aware wrapLogicalLine().
+    // Each entry: { logIdx, segIdx, segment, charStart }
+    //   logIdx   = index into c.lines
+    //   segIdx   = visual sub-row within the logical line
+    //   segment  = text of this visual row
+    //   charStart = logical col offset at which this segment begins
+    const allVisualRows = [];
+    for (let li = 0; li < c.lines.length; li++) {
+      const line = c.lines[li] || '';
+      const segs = wrapLogicalLine(line, innerCols);
+      let charOff = 0;
+      for (let si = 0; si < segs.length; si++) {
+        allVisualRows.push({ logIdx: li, segIdx: si, segment: segs[si], charStart: charOff });
+        charOff += segs[si].length;
+        // Skip the consumed whitespace char between segments (except last).
+        if (si < segs.length - 1) charOff += 1;
       }
-      abs += Math.floor(logCol / wrapWidth);
-      return abs;
     }
 
-    // Total visual rows across all logical lines
-    let totalVisualRows = 0;
-    for (const ln of c.lines) totalVisualRows += visualRowsForLine(ln);
+    // Find absolute visual row of the cursor (the last segment whose charStart ≤ cur.col).
+    let curVisRow = 0;
+    for (let vr = 0; vr < allVisualRows.length; vr++) {
+      const { logIdx: li, charStart } = allVisualRows[vr];
+      if (li === c.cur.row && charStart <= c.cur.col) curVisRow = vr;
+      if (li > c.cur.row) break;
+    }
 
-    // Cursor visual row (absolute)
-    const curVisRow = absoluteVisualRow(c.cur.row, c.cur.col);
-
-    // Adjust visibleRowOffset (in visual rows) so cursor is on screen.
+    // Adjust visibleRowOffset so cursor stays on screen.
     if (curVisRow < c.visibleRowOffset) c.visibleRowOffset = curVisRow;
     if (curVisRow >= c.visibleRowOffset + composeContentRows) {
       c.visibleRowOffset = curVisRow - composeContentRows + 1;
@@ -821,54 +857,38 @@ function render() {
     // Reset horizontal scroll in wrap mode
     c.colOffset = 0;
 
-    // Render visual rows
-    // Walk logical lines, generating visual rows, and render those in
-    // [visibleRowOffset, visibleRowOffset + composeContentRows).
-    let absVR = 0;        // current absolute visual row
-    let renderRow = 0;    // screen slot [0, composeContentRows)
-    let logIdx = 0;
+    // Render visible visual rows.
+    let renderRow = 0;
+    const visStart = c.visibleRowOffset;
+    const visEnd   = visStart + composeContentRows;
 
-    outer: while (logIdx < c.lines.length && renderRow < composeContentRows) {
-      const line = c.lines[logIdx] || '';
-      const vCount = visualRowsForLine(line);
-      for (let vi = 0; vi < vCount; vi++) {
-        if (absVR >= c.visibleRowOffset) {
-          const screenRow = composeContentStart + renderRow;
-          out.push(moveTo(screenRow, 1) + eraseLine());
-          out.push(color(C.dim_c) + '│' + resetAttrs());
+    for (let vr = visStart; vr < Math.min(visEnd, allVisualRows.length); vr++) {
+      const { logIdx: li, segment, charStart } = allVisualRows[vr];
+      const screenRow = composeContentStart + renderRow;
+      out.push(moveTo(screenRow, 1) + eraseLine());
+      out.push(color(C.dim_c) + '│' + resetAttrs());
 
-          const segment = line.slice(vi * wrapWidth, (vi + 1) * wrapWidth);
-          const padded = segment + ' '.repeat(Math.max(0, innerCols - segment.length));
+      const padded = segment + ' '.repeat(Math.max(0, innerCols - segment.length));
 
-          // Cursor on this visual row?
-          const isCursorHere =
-            logIdx === c.cur.row &&
-            appState.view.focus === 'compose' &&
-            Math.floor(c.cur.col / wrapWidth) === vi;
+      // Cursor on this visual row?
+      const isCursorHere = li === c.cur.row && appState.view.focus === 'compose' && vr === curVisRow;
 
-          if (isCursorHere) {
-            const localCol = c.cur.col % wrapWidth;
-            // If cursor is at EOL (localCol === segment.length which may be wrapWidth),
-            // put the block at position localCol (= segment.length for last visual row).
-            if (localCol <= innerCols) {
-              const before = padded.slice(0, localCol);
-              const at = padded[localCol] || ' ';
-              const after = padded.slice(localCol + 1);
-              out.push(' ' + before + reverse() + at + resetAttrs() + after + ' ');
-            } else {
-              out.push(' ' + padded + ' ');
-            }
-          } else {
-            out.push(' ' + padded + ' ');
-          }
-
-          out.push(color(C.dim_c) + '│' + resetAttrs());
-          renderRow++;
-          if (renderRow >= composeContentRows) break outer;
+      if (isCursorHere) {
+        const localCol = c.cur.col - charStart;
+        if (localCol >= 0 && localCol <= innerCols) {
+          const before = padded.slice(0, localCol);
+          const at = padded[localCol] || ' ';
+          const after = padded.slice(localCol + 1);
+          out.push(' ' + before + reverse() + at + resetAttrs() + after + ' ');
+        } else {
+          out.push(' ' + padded + ' ');
         }
-        absVR++;
+      } else {
+        out.push(' ' + padded + ' ');
       }
-      logIdx++;
+
+      out.push(color(C.dim_c) + '│' + resetAttrs());
+      renderRow++;
     }
 
     // Fill remaining rows with empty
@@ -962,7 +982,7 @@ function render() {
   out.push(moveTo(hintRowSecondary, 1) + eraseLine());
   let secondaryHint;
   if (appState.view.focus === 'compose') {
-    secondaryHint = 'Ctrl-W word-back · Ctrl-U line-back · Ctrl-K kill-EOL · Ctrl-←/→ word · Ctrl-\\ wrap · v verbose · q quit';
+    secondaryHint = 'Ctrl-W word-back · Ctrl-U line-back · Ctrl-K kill-EOL · Ctrl-←/→ word · Ctrl-Shift-↑/↓ paragraph · Ctrl-\\ wrap · q quit';
   } else {
     secondaryHint = 'j/k scroll · v filter · x clear · Enter detail · Ctrl-Down compose · q quit';
   }
@@ -1036,7 +1056,7 @@ function renderHelp(out, rows, cols) {
     'Ctrl-U          Delete to beginning of line',
     'Ctrl-K          Kill to end of line',
     'Ctrl-← / →      Jump by word (left / right)',
-    'Ctrl-↑ / ↓      Paragraph motion (up / down)',
+    'Ctrl-Shift-↑ / ↓  Paragraph motion (up / down)',
     'Ctrl-\\          Toggle line wrap (also Alt-w)',
     '← → ↑ ↓         Move cursor',
     'Home / End      Beginning / end of line',
@@ -1054,8 +1074,8 @@ function renderHelp(out, rows, cols) {
     'Enter           Open event detail modal',
     '',
     '── Global ────────────────────────────────────────────',
-    'Ctrl-Up         Move focus to events log',
-    'Ctrl-Down       Move focus to compose',
+    'Ctrl-Up         Move focus to events log (always)',
+    'Ctrl-Down       Move focus to compose (always)',
     '?               Toggle this help overlay',
     'Esc             Close overlay',
     'Ctrl-Q / Ctrl-C Quit',
@@ -1246,7 +1266,7 @@ function startNoTtyLoop() {
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 function cleanup(code = 0) {
   if (!NO_TTY) {
-    process.stdout.write(showCursor() + altScreenOff() + resetAttrs());
+    process.stdout.write(bracketedPasteOff() + showCursor() + altScreenOff() + resetAttrs());
   }
   process.exit(code);
 }
@@ -1521,11 +1541,78 @@ function setupInput(port) {
   });
 }
 
+// ANSI escape strip regexes for paste sanitization
+const RE_CSI  = /\x1b\[[0-9;]*[A-Za-z]/g;
+const RE_OSC  = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+function sanitizePaste(raw) {
+  return raw
+    .replace(RE_CSI, '')
+    .replace(RE_OSC, '');
+}
+
+function applyPaste(text) {
+  if (!text) return;
+  // Cap at PASTE_MAX_BYTES
+  if (Buffer.byteLength(text, 'utf8') > PASTE_MAX_BYTES) {
+    text = Buffer.from(text, 'utf8').slice(0, PASTE_MAX_BYTES).toString('utf8');
+  }
+  const stripped = sanitizePaste(text);
+  if (!stripped) return;
+  // Single undo group for the whole paste
+  pushUndo(true);
+  const newLines = stripped.split('\n');
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  const left = line.slice(0, c.cur.col);
+  const right = line.slice(c.cur.col);
+  if (newLines.length === 1) {
+    // Single-line paste — insert inline
+    c.lines[c.cur.row] = left + newLines[0] + right;
+    c.cur.col = left.length + newLines[0].length;
+  } else {
+    // Multi-line paste: split current line, splice in paste lines
+    const firstLine = left + newLines[0];
+    const lastLine  = newLines[newLines.length - 1] + right;
+    const middle    = newLines.slice(1, -1);
+    const spliced   = [firstLine, ...middle, lastLine];
+    c.lines.splice(c.cur.row, 1, ...spliced);
+    c.cur.row += newLines.length - 1;
+    c.cur.col = newLines[newLines.length - 1].length;
+  }
+  markDirty();
+  endUndoGroup();
+  clampCursor();
+  scheduleRender();
+}
+
 function processInputBuffer(port) {
   while (inputBuf.length > 0) {
+    // If we are inside a bracketed paste, scan for the end marker.
+    if (appState.pasteBuffer !== null) {
+      const endMarker = Buffer.from('\x1b[201~');
+      const idx = inputBuf.indexOf(endMarker);
+      if (idx === -1) {
+        // End marker not yet in buffer — stash everything and wait.
+        appState.pasteBuffer += inputBuf.toString('utf8');
+        inputBuf = Buffer.alloc(0);
+        return;
+      }
+      // Found the end marker.
+      appState.pasteBuffer += inputBuf.slice(0, idx).toString('utf8');
+      inputBuf = inputBuf.slice(idx + endMarker.length);
+      const pasted = appState.pasteBuffer;
+      appState.pasteBuffer = null;
+      if (appState.view.focus === 'compose') applyPaste(pasted);
+      continue;
+    }
     const result = parseKey(inputBuf);
     if (!result) break;
     inputBuf = inputBuf.slice(result.consumed);
+    if (result.key === 'paste-start') {
+      appState.pasteBuffer = '';
+      continue;
+    }
     handleKey(result.key, port);
   }
 }
@@ -1586,13 +1673,30 @@ function parseKey(buf) {
         return { key: 'home', consumed: 4 };
       if (b2 === 0x34 && buf.length >= 4 && buf[3] === 0x7e)
         return { key: 'end', consumed: 4 };
-      // Modified arrows: ESC [ 1 ; 5 A (ctrl-up), ESC [ 1 ; 5 B (ctrl-down)
-      if (b2 === 0x31 && buf.length >= 6 && buf[3] === 0x3b && buf[4] === 0x35) {
-        const b5 = buf[5];
-        if (b5 === 0x41) return { key: 'ctrl-up',    consumed: 6 };
-        if (b5 === 0x42) return { key: 'ctrl-down',  consumed: 6 };
-        if (b5 === 0x43) return { key: 'ctrl-right', consumed: 6 };
-        if (b5 === 0x44) return { key: 'ctrl-left',  consumed: 6 };
+      // Modified arrows: ESC [ 1 ; <modifier> <letter>
+      // modifier 5 = Ctrl, modifier 6 = Ctrl+Shift
+      if (b2 === 0x31 && buf.length >= 6 && buf[3] === 0x3b) {
+        const mod = buf[4];
+        const b5  = buf[5];
+        if (mod === 0x35) { // Ctrl
+          if (b5 === 0x41) return { key: 'ctrl-up',    consumed: 6 };
+          if (b5 === 0x42) return { key: 'ctrl-down',  consumed: 6 };
+          if (b5 === 0x43) return { key: 'ctrl-right', consumed: 6 };
+          if (b5 === 0x44) return { key: 'ctrl-left',  consumed: 6 };
+        }
+        if (mod === 0x36) { // Ctrl+Shift
+          if (b5 === 0x41) return { key: 'ctrl-shift-up',   consumed: 6 };
+          if (b5 === 0x42) return { key: 'ctrl-shift-down', consumed: 6 };
+        }
+      }
+      // Bracketed paste markers: ESC [ 200 ~ (6 bytes) / ESC [ 201 ~ (6 bytes)
+      if (b2 === 0x32 && buf.length >= 4 && buf[3] === 0x30) {
+        // prefix is ESC [ 2 0 — could be paste-start (200~) or paste-end (201~); need 6 bytes.
+        if (buf.length < 6) return null; // wait for more data
+        if (buf[4] === 0x30 && buf[5] === 0x7e)
+          return { key: 'paste-start', consumed: 6 };
+        if (buf[4] === 0x31 && buf[5] === 0x7e)
+          return { key: 'paste-end', consumed: 6 };
       }
       // Unknown CSI — swallow conservatively.
       return { key: `esc-[${String.fromCharCode(b2)}`, consumed: 3 };
@@ -1721,23 +1825,18 @@ function handleKey(key, port) {
     return;
   }
 
-  // Ctrl-Up / Ctrl-Down: focus toggle when in events pane;
-  // in compose pane they become paragraph motion (handled in handleComposeKey).
-  if (key === 'ctrl-up' && appState.view.focus === 'events') {
-    // In events focus: Ctrl-Up is focus toggle (keep existing behaviour)
-    // Actually: original: ctrl-up → events focus, ctrl-down → compose focus.
-    // New rule: in events focus, ctrl-up/ctrl-down stay as focus toggles.
-    // In compose focus, ctrl-up/ctrl-down become paragraph motion (handleComposeKey handles them).
+  // Ctrl-Up / Ctrl-Down: ALWAYS focus toggle (compose ↔ events), regardless of pane.
+  // Ctrl-Shift-Up / Ctrl-Shift-Down: paragraph motion in compose (handled in handleComposeKey).
+  if (key === 'ctrl-up') {
     appState.view.focus = 'events';
     scheduleRender();
     return;
   }
-  if (key === 'ctrl-down' && appState.view.focus === 'events') {
+  if (key === 'ctrl-down') {
     appState.view.focus = 'compose';
     scheduleRender();
     return;
   }
-  // When focus is 'compose', ctrl-up and ctrl-down fall through to handleComposeKey.
 
   if (appState.view.focus === 'events') {
     handleEventsKey(key, port);
@@ -1848,12 +1947,12 @@ function handleComposeKey(key, port) {
       cursorWordRight();
       scheduleRender();
       return;
-    // Paragraph motion (Ctrl-Up/Down in compose focus)
-    case 'ctrl-up':
+    // Paragraph motion (Ctrl-Shift-Up/Down in compose focus)
+    case 'ctrl-shift-up':
       cursorParagraphUp();
       scheduleRender();
       return;
-    case 'ctrl-down':
+    case 'ctrl-shift-down':
       cursorParagraphDown();
       scheduleRender();
       return;
@@ -1933,7 +2032,7 @@ async function main() {
   const port = discoverPort();
 
   if (!NO_TTY) {
-    process.stdout.write(altScreenOn() + clearScreen() + hideCursor());
+    process.stdout.write(altScreenOn() + clearScreen() + hideCursor() + bracketedPasteOn());
     process.on('SIGINT', () => cleanup(0));
     process.on('SIGTERM', () => cleanup(0));
     process.on('SIGWINCH', () => scheduleRender());

@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- TUI compose: bracketed paste support. Multi-line pastes arrive as a single undo group with newlines preserved and ANSI escapes stripped; auto-indent is suppressed for paste content. Cap: 1 MB per paste (#39).
+
+### Changed
+
+- TUI compose: line wrap is now word-aware. Long lines break at the last whitespace within `innerCols`; words longer than `WORD_HARD_BREAK_RATIO * innerCols` (default 0.8) are hard-broken so very long URLs/identifiers don't push everything off-screen (#37).
+
 ### Fixed
 
+- TUI: Ctrl+Up/Down once again toggle focus between compose and events panes (regression from #27); paragraph motion moved to Ctrl+Shift+Up/Down (#36).
 - TUI event-detail popup: long lines now wrap at the popup width with 2-col inner margins; popup uses ~80% × ~60% of the terminal with a Unicode border and subtle drop shadow; content is scrollable with Up/Down and PgUp/PgDn (#31).
 
 
