@@ -1,0 +1,30 @@
+name: Stale PR nag
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  stale-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          prompt: |
+            List open PRs older than 7 days via:
+              gh pr list --state open --json number,title,createdAt,headRefName,labels,author --jq '[.[] | select((now - (.createdAt | fromdateiso8601)) > 604800)]'
+
+            For each:
+              - Skip if labels include `wip` or `do not merge`.
+              - Check `gh pr view <n> --json mergeStateStatus`.
+              - Post one comment via `gh pr comment <n>` with: one-sentence summary, "Still wanted? Still being worked on?", and "Note: needs rebase against `main`" if mergeStateStatus is DIRTY or BEHIND.
+              - For PRs older than 14 days, escalate: "This PR has been open more than two weeks; consider closing if no longer relevant."
+          claude_args: --allowed-tools "Read,Bash(gh pr list *,gh pr view *,gh pr comment *)"
