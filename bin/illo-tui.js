@@ -476,8 +476,12 @@ function render() {
 
   // Toast (row rows-1)
   out.push(moveTo(rows - 1, 1) + eraseLine());
-  if (appState.toast && appState.toast.expiresAt > Date.now()) {
-    out.push(color(C.green) + bold() + ` ✓ ${appState.toast.text}` + resetAttrs());
+  if (appState.toast && (appState.toast.persistent || appState.toast.expiresAt > Date.now())) {
+    const toastPrefix = appState.toast.persistent ? ' ! ' : ' ✓ ';
+    out.push(color(C.green) + bold() + toastPrefix + appState.toast.text + resetAttrs());
+    if (appState.toast.persistent) {
+      out.push(dim() + color(C.dim_c) + '  [any key to dismiss]' + resetAttrs());
+    }
   }
 
   // Overlay: reply mode
@@ -555,8 +559,19 @@ function cleanup(code = 0) {
 
 // ─── Toast helper ─────────────────────────────────────────────────────────────
 function showToast(text, ms = 2000) {
-  appState.toast = { text, expiresAt: Date.now() + ms };
-  setTimeout(() => { appState.toast = null; scheduleRender(); }, ms);
+  appState.toast = { text, expiresAt: Date.now() + ms, persistent: false };
+  setTimeout(() => {
+    if (appState.toast && !appState.toast.persistent) {
+      appState.toast = null;
+      scheduleRender();
+    }
+  }, ms);
+  scheduleRender();
+}
+
+function showPersistentToast(text) {
+  // Persistent toasts stay until any keypress dismisses them.
+  appState.toast = { text, expiresAt: Infinity, persistent: true };
   scheduleRender();
 }
 
@@ -781,6 +796,13 @@ function parseKey(buf) {
 function handleKey(key, port) {
   const { overlay } = appState;
 
+  // Dismiss persistent toast on any keypress (falls through to normal handler).
+  if (appState.toast?.persistent) {
+    appState.toast = null;
+    scheduleRender();
+    // Fall through — don't swallow the key.
+  }
+
   // Global quit
   if (key === 'ctrl-c' || (key === 'q' && !overlay && !appState.boxMode)) {
     cleanup(0);
@@ -803,10 +825,18 @@ function handleKey(key, port) {
       const item = selectedItem();
       if (item) {
         const text = appState.replyText;
+        const itemCopy = { ...item }; // capture sessionId before overlay clears
         appState.overlay = null;
         appState.replyText = '';
         httpPost(port, `/items/${item.id}/reply`, { text })
-          .then(() => showToast('replied / resumed → context queued for next prompt'))
+          .then(() => {
+            const sid = itemCopy.sessionId;
+            if (sid) {
+              showPersistentToast(`queued · type anything in session ${sid.slice(0, 8)} to deliver`);
+            } else {
+              showPersistentToast('queued · type anything in any Claude session to deliver');
+            }
+          })
           .catch((e) => showToast(`error: ${e.message}`));
       }
     } else if (key === 'backspace') {
@@ -888,8 +918,16 @@ function handleKey(key, port) {
     case 'enter': {
       const item = selectedItem();
       if (item) {
+        const itemCopy = { ...item };
         httpPost(port, `/items/${item.id}/resume`, {})
-          .then(() => showToast('replied / resumed → context queued for next prompt'))
+          .then(() => {
+            const sid = itemCopy.sessionId;
+            if (sid) {
+              showPersistentToast(`queued · type anything in session ${sid.slice(0, 8)} to deliver`);
+            } else {
+              showPersistentToast('queued · type anything in any Claude session to deliver');
+            }
+          })
           .catch((e) => showToast(`error: ${e.message}`));
       }
       break;

@@ -102,18 +102,26 @@ COUNT="$(echo "$STATE" | jq '[.items[] | select(.resolved == false)] | length')"
 assert_eq "unresolved item count" "$COUNT" "2"
 echo "  /state has 2 unresolved items  ok"
 
-# ---------- resume first item ----------
+# ---------- resume first item (has session_id=sess-dogfood → per-session file) ----------
 FIRST_ID="$(echo "$STATE" | jq -r '.items[0].id')"
 [[ -n "$FIRST_ID" ]] || fail "could not extract first item id"
 
-post_json "/items/${FIRST_ID}/resume" '{}' >/dev/null
+RESUME_RESP="$(post_json "/items/${FIRST_ID}/resume" '{}')"
+RESUME_FILE_REPORTED="$(echo "$RESUME_RESP" | jq -r '.resumeFile')"
+# The item has sessionId=sess-dogfood so the file should be per-session.
+PER_SESSION_RESUME="$ILLO_SIDEBAR_HOME/pending_resume_sess-dogfood.json"
+[[ -f "$PER_SESSION_RESUME" ]] || fail "per-session pending_resume_sess-dogfood.json was not created (reported: $RESUME_FILE_REPORTED)"
 
-RESUME_FILE="$ILLO_SIDEBAR_HOME/pending_resume.json"
-[[ -f "$RESUME_FILE" ]] || fail "pending_resume.json was not created"
+RESUME_ID="$(jq -r '.id' "$PER_SESSION_RESUME")"
+assert_eq "per-session resume file item id" "$RESUME_ID" "$FIRST_ID"
+RESUME_SID="$(jq -r '.sessionId' "$PER_SESSION_RESUME")"
+assert_eq "per-session resume file sessionId" "$RESUME_SID" "sess-dogfood"
+echo "  /items/$FIRST_ID/resume wrote per-session pending_resume_sess-dogfood.json  ok"
 
-RESUME_ID="$(jq -r '.id' "$RESUME_FILE")"
-assert_eq "resume file item id" "$RESUME_ID" "$FIRST_ID"
-echo "  /items/$FIRST_ID/resume wrote pending_resume.json  ok"
+# Legacy global file should NOT have been created (item has a sessionId)
+GLOBAL_RESUME_FILE="$ILLO_SIDEBAR_HOME/pending_resume.json"
+[[ ! -f "$GLOBAL_RESUME_FILE" ]] || fail "global pending_resume.json should NOT be written when item has a sessionId"
+echo "  global pending_resume.json not written (correct — item has sessionId)  ok"
 
 # ---------- focus first item ----------
 post_json "/items/${FIRST_ID}/focus" '{}' >/dev/null
@@ -175,7 +183,7 @@ SNOOZED="$(get_json /state | jq --arg id "$CUSTOM_ID" '[.items[] | select(.id ==
 [[ "$SNOOZED" != "null" && -n "$SNOOZED" ]] || fail "snooze did not set snoozedUntil"
 echo "  /items/$CUSTOM_ID/snooze sets snoozedUntil  ok"
 
-# ---------- v0.2: reply ----------
+# ---------- v0.2: reply (with sessionId → per-session file) ----------
 # Post a fresh ask_user so we have one to reply to.
 post_json /event '{
   "kind": "ask_user",
@@ -187,13 +195,58 @@ post_json /event '{
 REPLY_ID="$(get_json /state | jq -r '[.items[] | select(.title == "Reply?")][0].id')"
 [[ -n "$REPLY_ID" && "$REPLY_ID" != "null" ]] || fail "could not find reply target item"
 
-post_json "/items/${REPLY_ID}/reply" '{"text": "yes please"}' >/dev/null
-[[ -f "$RESUME_FILE" ]] || fail "reply did not write pending_resume.json"
-REPLY_TEXT="$(jq -r '.user_reply_text' "$RESUME_FILE")"
-assert_eq "user_reply_text in resume file" "$REPLY_TEXT" "yes please"
+REPLY_RESP="$(post_json "/items/${REPLY_ID}/reply" '{"text": "yes please"}')"
+PER_SESSION_REPLY_FILE="$ILLO_SIDEBAR_HOME/pending_resume_reply-sess.json"
+[[ -f "$PER_SESSION_REPLY_FILE" ]] || fail "reply did not write per-session pending_resume_reply-sess.json"
+REPLY_TEXT="$(jq -r '.user_reply_text' "$PER_SESSION_REPLY_FILE")"
+assert_eq "user_reply_text in per-session resume file" "$REPLY_TEXT" "yes please"
+REPLY_SID="$(jq -r '.sessionId' "$PER_SESSION_REPLY_FILE")"
+assert_eq "sessionId in per-session resume file" "$REPLY_SID" "reply-sess"
 REPLIED_FLAG="$(get_json /state | jq --arg id "$REPLY_ID" '[.items[] | select(.id == $id)][0].replied')"
 assert_eq "item.replied after /reply" "$REPLIED_FLAG" "true"
-echo "  /items/$REPLY_ID/reply writes pending_resume + flips replied=true  ok"
+echo "  /items/$REPLY_ID/reply writes per-session pending_resume_reply-sess.json + flips replied=true  ok"
+
+# Reply response should include sessionId
+REPLY_RESP_SID="$(echo "$REPLY_RESP" | jq -r '.sessionId')"
+assert_eq "reply response sessionId" "$REPLY_RESP_SID" "reply-sess"
+echo "  /reply response includes sessionId=reply-sess  ok"
+
+# ---------- v0.2: reply without sessionId → global fallback file ----------
+post_json /event '{
+  "kind": "ask_user",
+  "agent_id": "generic:no-session",
+  "agent_kind": "generic",
+  "tool_input": { "questions": [{ "question": "No session reply?" }] }
+}' >/dev/null
+NO_SID_ID="$(get_json /state | jq -r '[.items[] | select(.title == "No session reply?")][0].id')"
+[[ -n "$NO_SID_ID" && "$NO_SID_ID" != "null" ]] || fail "could not find no-session reply target item"
+
+post_json "/items/${NO_SID_ID}/reply" '{"text": "global reply"}' >/dev/null
+[[ -f "$GLOBAL_RESUME_FILE" ]] || fail "no-session reply did not write global pending_resume.json"
+GLOBAL_REPLY_TEXT="$(jq -r '.user_reply_text' "$GLOBAL_RESUME_FILE")"
+assert_eq "user_reply_text in global resume file" "$GLOBAL_REPLY_TEXT" "global reply"
+echo "  /reply without sessionId writes global pending_resume.json  ok"
+
+# ---------- v0.2: GET /resume-targets ----------
+# Cleanup previous files so we have a clean count
+rm -f "$PER_SESSION_REPLY_FILE" "$GLOBAL_RESUME_FILE" "$PER_SESSION_RESUME"
+
+# Write a couple of resume files manually
+echo '{"id":"itm_t1","sessionId":"tgt-sess","title":"Target 1","queuedAt":1700000000000}' \
+  > "$ILLO_SIDEBAR_HOME/pending_resume_tgt-sess.json"
+echo '{"id":"itm_t2","sessionId":null,"title":"Target 2","queuedAt":1700000001000}' \
+  > "$ILLO_SIDEBAR_HOME/pending_resume.json"
+
+TARGETS="$(get_json /resume-targets)"
+TARGETS_COUNT="$(echo "$TARGETS" | jq 'length')"
+[[ "$TARGETS_COUNT" -ge 2 ]] || fail "/resume-targets should return >= 2 entries, got $TARGETS_COUNT"
+
+SID_TARGET="$(echo "$TARGETS" | jq -r '[.[] | select(.sessionId == "tgt-sess")][0].itemId')"
+assert_eq "/resume-targets per-session itemId" "$SID_TARGET" "itm_t1"
+echo "  GET /resume-targets returns queued targets  ok"
+
+# Clean up
+rm -f "$ILLO_SIDEBAR_HOME/pending_resume_tgt-sess.json" "$ILLO_SIDEBAR_HOME/pending_resume.json"
 
 # ---------- v0.2: /stats ----------
 STATS_JSON="$(get_json /stats)"
@@ -331,6 +384,31 @@ assert_eq "enriched ask_user projectName" "$ENRICH_ASK_PROJ" "testapp"
 ENRICH_ASK_BRANCH="$(get_json /state | jq -r --arg id "$ENRICH_ASK_ID" '.items[] | select(.id == $id) | .gitBranch')"
 assert_eq "enriched ask_user gitBranch" "$ENRICH_ASK_BRANCH" "fix/6-test"
 echo "  enriched ask_user: cwd/projectName/gitBranch pass through  ok"
+
+echo "  --- issue #12: resume payload carries transcript_snapshot ---"
+ITEM=$(post_json /event '{
+  "kind":"ask_user",
+  "session_id":"sid12",
+  "agent_id":"claude-code:sid12",
+  "agent_kind":"claude-code",
+  "transcript_snapshot":"foo\nassistant: hello world\nbar",
+  "tool_input":{"questions":[{"question":"q?","options":[{"label":"a"}]}]}
+}')
+ID=$(echo "$ITEM" | jq -r '.item.id')
+[[ -n "$ID" && "$ID" != "null" ]] || fail "could not extract item id for issue #12 test"
+post_json "/items/${ID}/resume" '{}' >/dev/null
+RESUMED=$(cat "$ILLO_SIDEBAR_HOME/pending_resume_sid12.json")
+echo "$RESUMED" | jq -e '.transcript_snapshot | contains("assistant: hello world")' >/dev/null && echo "  resume payload has transcript_snapshot  ok" || { echo "  FAIL: snapshot missing"; exit 1; }
+echo "$RESUMED" | jq -e '.agent_kind == "claude-code"' >/dev/null && echo "  resume payload has agent_kind  ok" || { echo "  FAIL: agent_kind missing"; exit 1; }
+
+echo "  --- issue #12: on-user-prompt.sh injects recent_transcript ---"
+HOOK_OUT=$(printf '{"session_id":"sid12","prompt":"test"}' | \
+  ILLO_SIDEBAR_HOME="$ILLO_SIDEBAR_HOME" \
+  ILLO_SIDEBAR_PORT="$PORT" \
+  CLAUDE_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" \
+  bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/on-user-prompt.sh")
+echo "$HOOK_OUT" | jq -e '.hookSpecificOutput.additionalContext | contains("recent_transcript:")' >/dev/null && echo "  hook injected recent_transcript  ok" || { echo "  FAIL: hook didn't inject snapshot"; echo "$HOOK_OUT"; exit 1; }
+echo "$HOOK_OUT" | jq -e '.hookSpecificOutput.additionalContext | contains("assistant: hello world")' >/dev/null && echo "  hook included transcript content  ok" || { echo "  FAIL: snapshot content missing"; exit 1; }
 
 echo ""
 echo "DOGFOOD OK"

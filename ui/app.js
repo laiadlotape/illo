@@ -517,15 +517,19 @@
         body: JSON.stringify({ text }),
       });
       if (res.ok) {
-        // Replace quick reply with replied pill
+        // Replace quick reply with queued note
         const $qr = node.querySelector('.quick-reply');
         $qr.style.display = 'none';
+        const item = state.items.find((i) => i.id === id);
+        const sessionId = item && item.sessionId ? item.sessionId.slice(0, 8) : null;
         const pill = document.createElement('div');
         pill.className = 'replied-pill';
-        pill.innerHTML = '[replied] <span class="replied-text">' + escHtml(text) + '</span>';
+        const sessionNote = sessionId
+          ? `queued · type in session ${sessionId} to deliver`
+          : 'queued · type in any Claude session to deliver';
+        pill.innerHTML = sessionNote + ' <span class="replied-text">' + escHtml(text) + '</span>';
         node.appendChild(pill);
         // Update local state
-        const item = state.items.find((i) => i.id === id);
         if (item) {
           item.replied = true;
           item.focused = true;

@@ -131,13 +131,64 @@ The original (generic) title is always preserved in `payload.original_title` so 
 | `POST` | `/event` | Ingest an event (see envelope above) |
 | `POST` | `/config` | Update `warnIntervalSeconds` / `warnStyle` live |
 | `POST` | `/items/:id/focus` | Mark item focused (suppresses re-warn) |
-| `POST` | `/items/:id/resume` | Write `pending_resume.json`, mark focused |
-| `POST` | `/items/:id/reply` | Body `{"text": "..."}`. Writes `pending_resume.json` with `user_reply_text`, marks item `replied: true, resolved: true, focused: true`. Fails 400 if `quickReplyEnabled === false`. |
+| `POST` | `/items/:id/resume` | Write per-session `pending_resume_<sessionId>.json` (or global `pending_resume.json` if item has no `sessionId`), mark focused. Response includes `resumeFile` path. |
+| `POST` | `/items/:id/reply` | Body `{"text": "..."}`. Writes per-session `pending_resume_<sessionId>.json` (or global fallback) with `user_reply_text`, marks item `replied: true, resolved: true, focused: true`. Fails 400 if `quickReplyEnabled === false`. Response includes `resumeFile` and `sessionId`. |
+| `GET` | `/resume-targets` | List all currently-queued resume files. Returns `[{sessionId, itemId, title, queuedAt, filePath}, ...]`. Scans `$STATE_DIR` for `pending_resume*.json` files on each call. |
 | `POST` | `/items/:id/snooze` | Body `{"seconds": 900}`. Sets `snoozedUntil = now + seconds*1000`; broadcast `item:update`. |
 | `DELETE` | `/items/:id` | Remove item immediately (logged as `dismissed` in history) |
 | `POST` | `/clear` | Remove all resolved items |
 | `GET` | `/` (and assets) | Serve `ui/` static files |
 | `WS` | `/ws` | WebSocket; server pushes `snapshot`, `item:add`, `item:update`, `item:remove`, `item:warn`, `config`, `cleared`, `session` |
+
+### Per-session resume routing
+
+When an item carries a `sessionId`, the `/resume` and `/reply` endpoints write
+to a **per-session** file:
+
+```
+$STATE_DIR/pending_resume_<sessionId>.json
+```
+
+When the item has no `sessionId` (e.g. events from a non-Claude-Code agent SDK),
+the legacy **global** file is used as a fallback for back-compat:
+
+```
+$STATE_DIR/pending_resume.json
+```
+
+The `UserPromptSubmit` hook (`bin/on-user-prompt.sh`) checks the per-session file
+first (using the hook's own `session_id`), then falls back to the global file.
+This ensures that with multiple Claude sessions running, only the correct session
+consumes the queued reply.
+
+#### Resume file shape
+
+Both `/resume` and `/reply` write a JSON file with the following fields:
+
+```jsonc
+{
+  "id":                "itm_...",
+  "sessionId":         "string|null",
+  "title":             "string",
+  "snippet":           "string",
+  "original_payload":  "stringified JSON of the item's payload",
+  "user_reply_text":   "string  (only present on /reply)",
+  "ts":                "ISO8601",
+  "queuedAt":          1730000000000,
+  "transcript_snapshot": "string|null  — last N lines of the agent transcript at the time the item was created",
+  "project_name":      "string|null  — populated when the item carries projectName",
+  "git_branch":        "string|null  — populated when the item carries gitBranch",
+  "agent_kind":        "string|null  — e.g. 'claude-code', 'langgraph'"
+}
+```
+
+The `UserPromptSubmit` hook uses these fields to build the `additionalContext`
+block. The `transcript_snapshot` is capped to the last 80 lines and indented
+4 spaces under a `recent_transcript: |` key. Optional fields (`agent_kind`,
+`project_name`, `git_branch`) are omitted from the context block when empty.
+
+`GET /resume-targets` lists all currently-queued resume files so the TUI can
+surface delivery hints to the user.
 
 ### Re-warn cadence
 
