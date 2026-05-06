@@ -1,0 +1,35 @@
+# Test output
+tests/node_modules/
+tests/playwright-report/
+tests/test-results/
+tests/.last-run.json
+
+# Daemon state (any path under ~/.claude/illo-sidebar/ or a local dev dir)
+state.json
+history.jsonl
+daemon.port
+daemon.pid
+daemon.log
+pending_resume.json
+vcr-current.jsonl
+browser-profile/
+vcr/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.log
+.vscode/
+.idea/
+
+# Claude Code per-project state (session, transcripts, etc.)
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+npm-debug.log*

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>illo · pending</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body data-mode="full">
+    <header class="bar">
+      <div class="brand">
+        <span class="dot" id="conn-dot" title="connection"></span>
+        <span class="title">illo · pending</span>
+      </div>
+      <div class="actions">
+        <button id="btn-notify" title="Toggle browser notifications">notif: on</button>
+        <a href="/stats.html" target="_blank" class="btn-link">stats</a>
+        <button id="btn-clear" title="Clear resolved">clear</button>
+        <button id="btn-mode" title="Toggle compact box (B)">box</button>
+        <button id="btn-config" title="Settings">&#9881;</button>
+      </div>
+    </header>
+
+    <section id="settings" class="settings hidden">
+      <label>
+        Re-warn every
+        <input id="cfg-warn" type="number" min="0" step="30" />
+        seconds (0 = off)
+      </label>
+      <label>
+        Style
+        <select id="cfg-style">
+          <option value="pulse">pulse</option>
+          <option value="blink">blink</option>
+          <option value="glow">glow</option>
+          <option value="none">none</option>
+        </select>
+      </label>
+      <button id="cfg-save">save</button>
+    </section>
+
+    <div class="filter-row" id="filter-row">
+      <button class="chip" data-filter="all">all</button>
+      <button class="chip active" data-filter="pending">pending</button>
+      <button class="chip" data-filter="snoozed">snoozed</button>
+      <div class="chip-dropdown" id="filter-urgency">
+        <button class="chip" id="chip-urgency">by urgency ▾</button>
+        <div class="chip-dropdown-menu" id="urgency-menu">
+          <button data-urgency="">any</button>
+          <button data-urgency="low">low</button>
+          <button data-urgency="normal">normal</button>
+          <button data-urgency="urgent">urgent</button>
+        </div>
+      </div>
+      <div class="chip-dropdown" id="filter-kind">
+        <button class="chip" id="chip-kind">by kind ▾</button>
+        <div class="chip-dropdown-menu" id="kind-menu">
+          <button data-kind="">any</button>
+          <button data-kind="ask_user">ask user</button>
+          <button data-kind="notification">notification</button>
+          <button data-kind="custom">custom</button>
+          <button data-kind="idle">idle</button>
+        </div>
+      </div>
+      <div class="chip-dropdown" id="filter-agent">
+        <button class="chip" id="chip-agent">by agent ▾</button>
+        <div class="chip-dropdown-menu" id="agent-menu">
+          <button data-agent="">any</button>
+        </div>
+      </div>
+    </div>
+
+    <main id="list" class="list" aria-live="polite">
+      <div id="empty" class="empty">No pending inputs. Claude isn't waiting on you.</div>
+    </main>
+
+    <aside id="box" class="box hidden" title="Click to expand sidebar">
+      <span id="box-count">0</span>
+      <span class="box-label">pending</span>
+    </aside>
+
+    <template id="item-tpl">
+      <article class="item" data-id="">
+        <div class="item-head">
+          <div class="item-head-left">
+            <span class="urgency-badge"></span>
+            <span class="kind"></span>
+          </div>
+          <div class="item-head-right">
+            <span class="snooze-badge" style="display:none"></span>
+            <span class="age" data-ts=""></span>
+          </div>
+        </div>
+        <div class="agent-line" style="display:none"></div>
+        <h3 class="item-title"></h3>
+        <p class="item-snippet"></p>
+        <details class="transcript-expander" style="display:none">
+          <summary>context</summary>
+          <pre class="transcript-pre"></pre>
+        </details>
+        <div class="item-actions">
+          <button class="btn-resume">resume here</button>
+          <button class="btn-ack">acknowledge</button>
+          <div class="snooze-wrapper">
+            <button class="btn-snooze">snooze ▾</button>
+            <div class="snooze-menu">
+              <button data-snooze="300">5m</button>
+              <button data-snooze="900">15m</button>
+              <button data-snooze="3600">1h</button>
+              <button data-snooze="14400">4h</button>
+            </div>
+          </div>
+          <button class="btn-dismiss" title="Dismiss">&#215;</button>
+        </div>
+        <div class="quick-reply">
+          <textarea class="reply-textarea" placeholder="Type a reply... (Cmd/Ctrl+Enter to send)" rows="2"></textarea>
+          <div class="quick-reply-actions">
+            <button class="btn-send">send</button>
+            <span class="send-hint">Cmd/Ctrl+Enter</span>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

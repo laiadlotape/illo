@@ -1,0 +1,5 @@
+{"after_ms": 0, "event": {"kind": "ask_user", "agent_id": "claude-code:demo-typical", "agent_kind": "claude-code", "session_id": "demo-typical", "urgency": "normal", "tool_input": {"questions": [{"question": "Approve deploy to production?", "options": [{"label": "Yes, deploy"}, {"label": "No, cancel"}]}]}, "transcript_snapshot": "[assistant] I'm ready to deploy. Awaiting your approval."}}
+{"after_ms": 5000, "event": {"kind": "notification", "agent_id": "claude-code:demo-typical", "agent_kind": "claude-code", "session_id": "demo-typical", "urgency": "low", "message": "Build completed successfully — 42 tests passed, 0 failures."}}
+{"after_ms": 8000, "action": "focus", "by_index": 0}
+{"after_ms": 3000, "action": "reply", "by_index": 0, "text": "Yes, deploy"}
+{"after_ms": 2000, "event": {"kind": "notification", "agent_id": "claude-code:demo-typical", "agent_kind": "claude-code", "session_id": "demo-typical", "urgency": "normal", "message": "Deploy complete. New version is live."}}

@@ -1,0 +1,64 @@
+{
+  "name": "illo-sidebar",
+  "description": "CLI-native sidebar (TUI in a tmux split, browser fallback) that surfaces every moment Claude is waiting on you (questions, permission prompts, idle stops) so they don't get buried in scrollback. Gentle re-warn cadence, focus-clears-warn, click/keyboard-to-resume.",
+  "version": "0.2.0",
+  "author": { "name": "illo" },
+  "license": "MIT",
+  "homepage": "https://github.com/lotape6/illo-sidebar",
+  "userConfig": {
+    "warnIntervalSeconds": {
+      "type": "number",
+      "title": "Re-warn interval (seconds)",
+      "default": 300,
+      "description": "Seconds between gentle re-warn animations on a still-unacknowledged item. 0 disables re-warn."
+    },
+    "daemonPort": {
+      "type": "number",
+      "title": "Daemon port",
+      "default": 7821,
+      "description": "Localhost port the daemon and sidebar UI share."
+    },
+    "autoOpenSidebar": {
+      "type": "boolean",
+      "title": "Auto-open sidebar on session start",
+      "default": true,
+      "description": "Open the sidebar automatically on session start. With the TUI default, this only auto-spawns inside tmux or when ILLO_SIDEBAR_AUTO_TERMINAL is set; for the browser fallback, see /sb-web."
+    },
+    "browserCommand": {
+      "type": "string",
+      "title": "Browser command (for /sb-web)",
+      "default": "",
+      "description": "Browser launcher used by /sb-web only (e.g. 'google-chrome', 'chromium', 'firefox'). Empty = autodetect."
+    },
+    "warnStyle": {
+      "type": "string",
+      "title": "Warn animation style",
+      "default": "pulse",
+      "description": "Animation style for re-warn: 'pulse', 'blink', 'glow', or 'none'."
+    },
+    "pushProvider": {
+      "type": "string",
+      "title": "Mobile push provider",
+      "default": "off",
+      "description": "Mobile push provider: 'ntfy', 'pushover', or 'off'. DISABLED BY DEFAULT — see docs/push.md to opt in."
+    },
+    "pushNtfyTopic": {
+      "type": "string",
+      "title": "ntfy topic name",
+      "default": "",
+      "description": "ntfy.sh topic name (only used if pushProvider=ntfy)."
+    },
+    "pushNtfyServer": {
+      "type": "string",
+      "title": "ntfy server URL",
+      "default": "https://ntfy.sh",
+      "description": "ntfy server base URL (self-host capable)."
+    },
+    "pushAfkThresholdSeconds": {
+      "type": "number",
+      "title": "AFK threshold (seconds)",
+      "default": 120,
+      "description": "Only mobile-push items pending this long without focus. Default: 120 seconds."
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "illo",
+  "owner": { "name": "illo" },
+  "description": "Local marketplace hosting the illo-sidebar plugin.",
+  "plugins": [
+    {
+      "name": "illo-sidebar",
+      "source": "./",
+      "description": "CLI-native sidebar (TUI in tmux split, browser fallback) that surfaces every moment Claude is waiting on you.",
+      "version": "0.2.0"
+    }
+  ]
+}
