@@ -77,6 +77,7 @@ const C = {
   blue:    111,
   yellow:  227,
   cyan:    109,
+  hint:    245,  // secondary hint row; no dim() applied
 };
 
 function kindColor(kind) {
@@ -180,6 +181,33 @@ function httpPost(port, path, body) {
   });
 }
 
+// ─── TUI preferences (persisted to ~/.claude/illo-sidebar/tui-prefs.json) ────
+// The wrap preference is TUI-only (not daemon state), so we read/write the
+// file directly rather than adding a daemon round-trip.
+const ILLO_HOME = process.env.ILLO_SIDEBAR_HOME ||
+  `${os.homedir()}/.claude/illo-sidebar`;
+const TUI_PREFS_FILE = path.join(ILLO_HOME, 'tui-prefs.json');
+
+function loadTuiPrefs() {
+  try {
+    const raw = fs.readFileSync(TUI_PREFS_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function saveTuiPrefs(prefs) {
+  try {
+    fs.mkdirSync(ILLO_HOME, { recursive: true });
+    fs.writeFileSync(TUI_PREFS_FILE, JSON.stringify(prefs, null, 2) + '\n', 'utf8');
+  } catch {
+    // non-fatal — pref just won't survive restart
+  }
+}
+
+const tuiPrefs = loadTuiPrefs();
+
 // ─── Application state ────────────────────────────────────────────────────────
 const appState = {
   paneId: null,
@@ -193,6 +221,7 @@ const appState = {
     eventScroll: 0,
     eventFilter: 'low-noise',  // 'low-noise' | 'verbose'
     focus: 'compose',          // 'compose' | 'events'
+    helpOpen: false,           // full help overlay
   },
 
   compose: {
@@ -200,6 +229,7 @@ const appState = {
     cur: { row: 0, col: 0 },
     visibleRowOffset: 0,
     colOffset: 0,
+    wrap: tuiPrefs.composeWrap !== undefined ? tuiPrefs.composeWrap : true,
     dirty: false,
     undoStack: [],
     redoStack: [],
@@ -463,6 +493,90 @@ function cursorEnd() {
   c.cur.col = (c.lines[c.cur.row] || '').length;
 }
 
+// ─── word motion helpers ──────────────────────────────────────────────────────
+// "Word" = contiguous run of [A-Za-z0-9_]. Uses skip-then-find rule.
+function isWordChar(ch) {
+  return ch !== undefined && /[A-Za-z0-9_]/.test(ch);
+}
+
+function cursorWordLeft() {
+  endUndoGroup();
+  const c = appState.compose;
+  // If at col 0, wrap to end of previous line.
+  if (c.cur.col === 0) {
+    if (c.cur.row > 0) {
+      c.cur.row -= 1;
+      c.cur.col = (c.lines[c.cur.row] || '').length;
+    }
+    return;
+  }
+  const line = c.lines[c.cur.row] || '';
+  let i = c.cur.col;
+  // Skip non-word chars to the left
+  while (i > 0 && !isWordChar(line[i - 1])) i--;
+  // Skip word chars to the left
+  while (i > 0 && isWordChar(line[i - 1])) i--;
+  c.cur.col = i;
+}
+
+function cursorWordRight() {
+  endUndoGroup();
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  // If at EOL, wrap to start of next line.
+  if (c.cur.col >= line.length) {
+    if (c.cur.row < c.lines.length - 1) {
+      c.cur.row += 1;
+      c.cur.col = 0;
+    }
+    return;
+  }
+  let i = c.cur.col;
+  // Skip word chars to the right
+  while (i < line.length && isWordChar(line[i])) i++;
+  // Skip non-word chars to the right
+  while (i < line.length && !isWordChar(line[i])) i++;
+  c.cur.col = i;
+}
+
+// Paragraph motion: jump to next/prev blank line (line.trim() === '').
+function cursorParagraphUp() {
+  endUndoGroup();
+  const c = appState.compose;
+  let r = c.cur.row - 1;
+  // Skip any blank lines immediately above
+  while (r > 0 && (c.lines[r] || '').trim() === '') r--;
+  // Then find the previous blank line
+  while (r > 0 && (c.lines[r] || '').trim() !== '') r--;
+  c.cur.row = r;
+  clampCursor();
+}
+
+function cursorParagraphDown() {
+  endUndoGroup();
+  const c = appState.compose;
+  const last = c.lines.length - 1;
+  let r = c.cur.row + 1;
+  // Skip any blank lines immediately below
+  while (r < last && (c.lines[r] || '').trim() === '') r++;
+  // Then find the next blank line
+  while (r < last && (c.lines[r] || '').trim() !== '') r++;
+  c.cur.row = Math.min(r, last);
+  clampCursor();
+}
+
+function toggleWrap() {
+  appState.compose.wrap = !appState.compose.wrap;
+  // Reset horizontal scroll when switching modes
+  appState.compose.colOffset = 0;
+  appState.compose.visibleRowOffset = 0;
+  // Persist preference
+  const prefs = loadTuiPrefs();
+  prefs.composeWrap = appState.compose.wrap;
+  saveTuiPrefs(prefs);
+  showToast(`wrap ${appState.compose.wrap ? 'on' : 'off'}`);
+}
+
 // ─── render ───────────────────────────────────────────────────────────────────
 let lastRenderTime = 0;
 let renderScheduled = false;
@@ -530,9 +644,9 @@ function render() {
   out.push(moveTo(2, 1) + eraseLine() + color(C.dim_c) + '─'.repeat(cols) + resetAttrs());
 
   // ── layout: events (top), compose (bottom) ──────────────────────────────
-  // Reserved: 1 status + 1 divider + 1 events header + 1 divider + 1 compose box top + 1 box bottom + 1 hint = 7 chrome rows
+  // Reserved: 1 status + 1 divider + 1 events header + 1 divider + 1 compose box top + 1 box bottom + 2 hint = 8 chrome rows
   // Plus N event log rows + M compose content rows + 1 compose status line.
-  const HINT_ROWS = 1;
+  const HINT_ROWS = 2;
   const STATUS_ROWS = 1;
   const DIVIDER_ROWS = 1;
   const EVENTS_HEADER_ROWS = 1;
@@ -574,7 +688,8 @@ function render() {
   const composeContentStart = composeBoxTopRow + 1;
   const composeContentRows = composeRows;
   const composeBoxBottomRow = composeContentStart + composeContentRows;
-  const hintRow = rows;
+  const hintRowPrimary = rows - 1;  // row N-1: always-visible primary keybindings
+  const hintRowSecondary = rows;    // row N: contextual secondary keybindings
 
   // ── events header ───────────────────────────────────────────────────────
   out.push(moveTo(3, 1) + eraseLine());
@@ -619,84 +734,227 @@ function render() {
   const lineCount = appState.compose.lines.length;
   const wordCount = composeWordCount();
   const dirtyTag = appState.compose.dirty ? ' · *unsaved' : '';
+  const wrapTag = appState.compose.wrap ? ' · wrap:on' : ' · wrap:off';
   const composeFocusTag = appState.view.focus === 'compose' ? bold() + color(C.amber) + 'compose' + resetAttrs() : color(C.dim_c) + 'compose' + resetAttrs();
   out.push(' ' + composeFocusTag + color(C.dim_c)
-    + ` · lines: ${lineCount} · words: ${wordCount}${dirtyTag}` + resetAttrs());
+    + ` · lines: ${lineCount} · words: ${wordCount}${dirtyTag}${wrapTag}` + resetAttrs());
 
   // ── compose box top border ──────────────────────────────────────────────
   out.push(moveTo(composeBoxTopRow, 1) + eraseLine());
   out.push(color(C.dim_c) + '┌' + '─'.repeat(Math.max(0, cols - 2)) + '┐' + resetAttrs());
 
   // ── compose content ─────────────────────────────────────────────────────
-  // Adjust visible window to keep cursor on screen.
+  // innerCols = usable characters inside the box (borders + 1 padding each side).
   const innerCols = Math.max(4, cols - 4); // 2 borders + 2 padding
   const c = appState.compose;
-  // Vertical: scroll so cursor row is between 0 and composeContentRows-1.
-  if (c.cur.row < c.visibleRowOffset) c.visibleRowOffset = c.cur.row;
-  if (c.cur.row >= c.visibleRowOffset + composeContentRows) {
-    c.visibleRowOffset = c.cur.row - composeContentRows + 1;
-  }
-  if (c.visibleRowOffset < 0) c.visibleRowOffset = 0;
-  // Horizontal: scroll so cursor col is between 0 and innerCols-1.
-  if (c.cur.col < c.colOffset) c.colOffset = c.cur.col;
-  if (c.cur.col >= c.colOffset + innerCols) {
-    c.colOffset = c.cur.col - innerCols + 1;
-  }
-  if (c.colOffset < 0) c.colOffset = 0;
 
-  for (let r = 0; r < composeContentRows; r++) {
-    const rowNum = composeContentStart + r;
-    out.push(moveTo(rowNum, 1) + eraseLine());
-    const lineIdx = c.visibleRowOffset + r;
-    const line = c.lines[lineIdx];
-    out.push(color(C.dim_c) + '│' + resetAttrs());
-    if (line === undefined) {
+  if (c.wrap) {
+    // ── wrap mode ────────────────────────────────────────────────────────
+    // Build visual rows: each logical line wraps at innerCols.
+    // We need to know the visual row of the cursor to scroll correctly.
+    const wrapWidth = innerCols;
+
+    // Count visual rows for a logical line
+    function visualRowsForLine(line) {
+      if (line.length === 0) return 1;
+      return Math.ceil(line.length / wrapWidth);
+    }
+
+    // Map logical (logRow, logCol) → visual row offset from the start of
+    // logical line's visual rows, and visual col within that row.
+    function logicalToVisual(logRow, logCol) {
+      const vRow = Math.floor(logCol / wrapWidth);
+      const vCol = logCol % wrapWidth;
+      return { vRow, vCol };
+    }
+
+    // Calculate the absolute visual row of (logRow, logCol) across all lines.
+    function absoluteVisualRow(logRow, logCol) {
+      let abs = 0;
+      for (let i = 0; i < logRow; i++) {
+        abs += visualRowsForLine(c.lines[i] || '');
+      }
+      abs += Math.floor(logCol / wrapWidth);
+      return abs;
+    }
+
+    // Total visual rows across all logical lines
+    let totalVisualRows = 0;
+    for (const ln of c.lines) totalVisualRows += visualRowsForLine(ln);
+
+    // Cursor visual row (absolute)
+    const curVisRow = absoluteVisualRow(c.cur.row, c.cur.col);
+
+    // Adjust visibleRowOffset (in visual rows) so cursor is on screen.
+    if (curVisRow < c.visibleRowOffset) c.visibleRowOffset = curVisRow;
+    if (curVisRow >= c.visibleRowOffset + composeContentRows) {
+      c.visibleRowOffset = curVisRow - composeContentRows + 1;
+    }
+    if (c.visibleRowOffset < 0) c.visibleRowOffset = 0;
+    // Reset horizontal scroll in wrap mode
+    c.colOffset = 0;
+
+    // Render visual rows
+    // Walk logical lines, generating visual rows, and render those in
+    // [visibleRowOffset, visibleRowOffset + composeContentRows).
+    let absVR = 0;        // current absolute visual row
+    let renderRow = 0;    // screen slot [0, composeContentRows)
+    let logIdx = 0;
+
+    outer: while (logIdx < c.lines.length && renderRow < composeContentRows) {
+      const line = c.lines[logIdx] || '';
+      const vCount = visualRowsForLine(line);
+      for (let vi = 0; vi < vCount; vi++) {
+        if (absVR >= c.visibleRowOffset) {
+          const screenRow = composeContentStart + renderRow;
+          out.push(moveTo(screenRow, 1) + eraseLine());
+          out.push(color(C.dim_c) + '│' + resetAttrs());
+
+          const segment = line.slice(vi * wrapWidth, (vi + 1) * wrapWidth);
+          const padded = segment + ' '.repeat(Math.max(0, innerCols - segment.length));
+
+          // Cursor on this visual row?
+          const isCursorHere =
+            logIdx === c.cur.row &&
+            appState.view.focus === 'compose' &&
+            Math.floor(c.cur.col / wrapWidth) === vi;
+
+          if (isCursorHere) {
+            const localCol = c.cur.col % wrapWidth;
+            // If cursor is at EOL (localCol === segment.length which may be wrapWidth),
+            // put the block at position localCol (= segment.length for last visual row).
+            if (localCol <= innerCols) {
+              const before = padded.slice(0, localCol);
+              const at = padded[localCol] || ' ';
+              const after = padded.slice(localCol + 1);
+              out.push(' ' + before + reverse() + at + resetAttrs() + after + ' ');
+            } else {
+              out.push(' ' + padded + ' ');
+            }
+          } else {
+            out.push(' ' + padded + ' ');
+          }
+
+          out.push(color(C.dim_c) + '│' + resetAttrs());
+          renderRow++;
+          if (renderRow >= composeContentRows) break outer;
+        }
+        absVR++;
+      }
+      logIdx++;
+    }
+
+    // Fill remaining rows with empty
+    while (renderRow < composeContentRows) {
+      const screenRow = composeContentStart + renderRow;
+      out.push(moveTo(screenRow, 1) + eraseLine());
+      out.push(color(C.dim_c) + '│' + resetAttrs());
       out.push(' '.repeat(innerCols + 2));
-    } else {
-      const sliced = line.slice(c.colOffset, c.colOffset + innerCols);
-      // Pad to fill
-      const padded = sliced + ' '.repeat(Math.max(0, innerCols - sliced.length));
-      // Render with cursor overlay if this is the cursor row AND focus on compose.
-      if (lineIdx === c.cur.row && appState.view.focus === 'compose') {
-        const localCol = c.cur.col - c.colOffset;
-        if (localCol >= 0 && localCol < innerCols) {
-          const before = padded.slice(0, localCol);
-          const at = padded[localCol] || ' ';
-          const after = padded.slice(localCol + 1);
-          out.push(' ' + before + reverse() + at + resetAttrs() + after + ' ');
+      out.push(color(C.dim_c) + '│' + resetAttrs());
+      renderRow++;
+    }
+  } else {
+    // ── no-wrap mode (horizontal scroll) — original behaviour ────────────
+    // Vertical: scroll so cursor row is between 0 and composeContentRows-1.
+    if (c.cur.row < c.visibleRowOffset) c.visibleRowOffset = c.cur.row;
+    if (c.cur.row >= c.visibleRowOffset + composeContentRows) {
+      c.visibleRowOffset = c.cur.row - composeContentRows + 1;
+    }
+    if (c.visibleRowOffset < 0) c.visibleRowOffset = 0;
+    // Horizontal: scroll so cursor col is between 0 and innerCols-1.
+    if (c.cur.col < c.colOffset) c.colOffset = c.cur.col;
+    if (c.cur.col >= c.colOffset + innerCols) {
+      c.colOffset = c.cur.col - innerCols + 1;
+    }
+    if (c.colOffset < 0) c.colOffset = 0;
+
+    for (let r = 0; r < composeContentRows; r++) {
+      const rowNum = composeContentStart + r;
+      out.push(moveTo(rowNum, 1) + eraseLine());
+      const lineIdx = c.visibleRowOffset + r;
+      const line = c.lines[lineIdx];
+      out.push(color(C.dim_c) + '│' + resetAttrs());
+      if (line === undefined) {
+        out.push(' '.repeat(innerCols + 2));
+      } else {
+        const sliced = line.slice(c.colOffset, c.colOffset + innerCols);
+        // Pad to fill
+        const padded = sliced + ' '.repeat(Math.max(0, innerCols - sliced.length));
+        // Render with cursor overlay if this is the cursor row AND focus on compose.
+        if (lineIdx === c.cur.row && appState.view.focus === 'compose') {
+          const localCol = c.cur.col - c.colOffset;
+          if (localCol >= 0 && localCol < innerCols) {
+            const before = padded.slice(0, localCol);
+            const at = padded[localCol] || ' ';
+            const after = padded.slice(localCol + 1);
+            out.push(' ' + before + reverse() + at + resetAttrs() + after + ' ');
+          } else {
+            out.push(' ' + padded + ' ');
+          }
         } else {
           out.push(' ' + padded + ' ');
         }
-      } else {
-        out.push(' ' + padded + ' ');
       }
+      out.push(color(C.dim_c) + '│' + resetAttrs());
     }
-    out.push(color(C.dim_c) + '│' + resetAttrs());
   }
 
   // ── compose box bottom border ───────────────────────────────────────────
   out.push(moveTo(composeBoxBottomRow, 1) + eraseLine());
   out.push(color(C.dim_c) + '└' + '─'.repeat(Math.max(0, cols - 2)) + '┘' + resetAttrs());
 
-  // ── hint row ────────────────────────────────────────────────────────────
-  out.push(moveTo(hintRow, 1) + eraseLine());
-  let hint;
-  if (appState.view.focus === 'compose') {
-    hint = ' Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-X clear · Ctrl-Z undo · Ctrl-Y redo · Ctrl-Up events · Ctrl-Q quit';
-  } else {
-    hint = ' j/k or ↑↓ scroll · v filter · x clear log · Enter detail · Ctrl-Down compose · Ctrl-Q quit';
+  // ── two-row hint footer ─────────────────────────────────────────────────
+  // Helper: render a hint string with bright-key / description coloring.
+  // Format: "Ctrl-S send" → Ctrl-S in color(255), " send" in color(C.hint).
+  function renderHintStr(str) {
+    // Segments separated by '·'. Each segment: "Key desc".
+    const parts = str.split('·');
+    let result = '';
+    for (let i = 0; i < parts.length; i++) {
+      const seg = parts[i].trim();
+      if (!seg) continue;
+      if (i > 0) result += color(C.hint) + ' · ';
+      // The first "word" (space-delimited run possibly including '-') is the key chord.
+      const spaceIdx = seg.indexOf(' ');
+      if (spaceIdx === -1) {
+        result += color(255) + seg + resetAttrs();
+      } else {
+        result += color(255) + seg.slice(0, spaceIdx) + resetAttrs()
+               + color(C.hint) + seg.slice(spaceIdx) + resetAttrs();
+      }
+    }
+    return result;
   }
-  out.push(dim() + color(C.dim_c) + truncate(hint, cols - 1) + resetAttrs());
 
-  // ── toast (drawn over the hint row, transient) ──────────────────────────
+  // Primary row (N-1): always-visible action keys — no dim().
+  out.push(moveTo(hintRowPrimary, 1) + eraseLine());
+  const primaryHint = 'Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-Z undo · ? help';
+  out.push(' ' + renderHintStr(primaryHint));
+
+  // Secondary row (N): contextual — no dim().
+  out.push(moveTo(hintRowSecondary, 1) + eraseLine());
+  let secondaryHint;
+  if (appState.view.focus === 'compose') {
+    secondaryHint = 'Ctrl-W word-back · Ctrl-U line-back · Ctrl-K kill-EOL · Ctrl-←/→ word · Ctrl-\\ wrap · v verbose · q quit';
+  } else {
+    secondaryHint = 'j/k scroll · v filter · x clear · Enter detail · Ctrl-Down compose · q quit';
+  }
+  out.push(' ' + color(C.hint) + truncate(secondaryHint, cols - 2) + resetAttrs());
+
+  // ── toast (drawn over primary hint row, transient) ──────────────────────
   if (appState.toast && appState.toast.expiresAt > Date.now()) {
-    out.push(moveTo(hintRow, 1) + eraseLine());
+    out.push(moveTo(hintRowPrimary, 1) + eraseLine());
     out.push(color(C.green) + bold() + ' ✓ ' + appState.toast.text + resetAttrs());
   }
 
   // ── modal overlay ───────────────────────────────────────────────────────
   if (appState.modal) {
     renderModal(out, rows, cols);
+  }
+
+  // ── help overlay ────────────────────────────────────────────────────────
+  if (appState.view.helpOpen) {
+    renderHelp(out, rows, cols);
   }
 
   process.stdout.write(out.join(''));
@@ -728,7 +986,71 @@ function renderModal(out, rows, cols) {
     + color(C.amber) + '└' + '─'.repeat(Math.max(0, w - 2)) + '┘' + resetAttrs());
 
   out.push(moveTo(startRow + h, startCol)
-    + dim() + color(C.dim_c) + ' [Esc] close' + resetAttrs());
+    + color(C.hint) + ' [Esc] close' + resetAttrs());
+}
+
+function renderHelp(out, rows, cols) {
+  const helpLines = [
+    '── Compose pane ──────────────────────────────────────',
+    'Ctrl-S          Send to claude pane (no auto-Enter)',
+    'Ctrl-D          Send + press Enter',
+    'Ctrl-E          Open $EDITOR on buffer',
+    'Ctrl-X          Clear compose buffer',
+    'Ctrl-Z          Undo',
+    'Ctrl-Y          Redo',
+    'Ctrl-L          Force-redraw',
+    'Ctrl-A          Beginning of line',
+    'Ctrl-W          Delete word backward',
+    'Ctrl-U          Delete to beginning of line',
+    'Ctrl-K          Kill to end of line',
+    'Ctrl-← / →      Jump by word (left / right)',
+    'Ctrl-↑ / ↓      Paragraph motion (up / down)',
+    'Ctrl-\\          Toggle line wrap (also Alt-w)',
+    '← → ↑ ↓         Move cursor',
+    'Home / End      Beginning / end of line',
+    'PgUp / PgDn     Scroll one screen',
+    'Enter           Newline (auto-indent)',
+    'Backspace       Delete char left',
+    'Delete          Delete char right',
+    '',
+    '── Events pane ───────────────────────────────────────',
+    'j / ↓           Scroll toward older events',
+    'k / ↑           Scroll toward newer events',
+    'PgUp / PgDn     Scroll five events',
+    'v               Toggle low-noise / verbose filter',
+    'x               Clear resolved events from view',
+    'Enter           Open event detail modal',
+    '',
+    '── Global ────────────────────────────────────────────',
+    'Ctrl-Up         Move focus to events log',
+    'Ctrl-Down       Move focus to compose',
+    '?               Toggle this help overlay',
+    'Esc             Close overlay',
+    'Ctrl-Q / Ctrl-C Quit',
+  ];
+  const w = Math.min(cols - 4, 60);
+  const h = Math.min(rows - 4, helpLines.length + 4);
+  const startRow = Math.max(2, Math.floor((rows - h) / 2));
+  const startCol = Math.max(2, Math.floor((cols - w) / 2));
+  const titleBar = ' keybindings ';
+
+  out.push(moveTo(startRow, startCol) + color(C.amber)
+    + '┌' + titleBar + '─'.repeat(Math.max(0, w - 2 - titleBar.length))
+    + '┐' + resetAttrs());
+
+  for (let i = 0; i < h - 2; i++) {
+    const ln = helpLines[i] || '';
+    out.push(moveTo(startRow + 1 + i, startCol)
+      + color(C.amber) + '│' + resetAttrs()
+      + ' ' + truncate(ln, w - 4) + ' '.repeat(Math.max(0, w - 4 - truncate(ln, w - 4).length))
+      + ' ' + color(C.amber) + '│' + resetAttrs());
+  }
+
+  out.push(moveTo(startRow + h - 1, startCol)
+    + color(C.amber) + '└' + '─'.repeat(Math.max(0, w - 2)) + '┘' + resetAttrs());
+
+  out.push(moveTo(startRow + h, startCol)
+    + color(C.hint) + ' [?] or [Esc] close' + resetAttrs());
 }
 
 // ─── No-TTY mode ──────────────────────────────────────────────────────────────
@@ -743,6 +1065,8 @@ function renderNoTty() {
     eventFilter: appState.view.eventFilter,
     composeLines: appState.compose.lines.length,
     composeWords: composeWordCount(),
+    composeWrap: appState.compose.wrap,
+    hintPrimary: 'Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-Z undo · ? help',
     events: evs.slice(-10).map((ev) => ({
       id: ev.id, kind: ev.kind, urgency: ev.urgency, title: eventTitle(ev),
     })),
@@ -1071,6 +1395,7 @@ function parseKey(buf) {
   if (b0 === 0x18) return { key: 'ctrl-x', consumed: 1 };
   if (b0 === 0x19) return { key: 'ctrl-y', consumed: 1 };
   if (b0 === 0x1a) return { key: 'ctrl-z', consumed: 1 };
+  if (b0 === 0x1c) return { key: 'ctrl-backslash', consumed: 1 };  // Ctrl-\ = wrap toggle
   if (b0 === 0x7f) return { key: 'backspace', consumed: 1 };
 
   // Escape sequences
@@ -1118,6 +1443,10 @@ function parseKey(buf) {
       if (b2 === 0x46) return { key: 'end',  consumed: 3 };
       return { key: `esc-O${String.fromCharCode(b2)}`, consumed: 3 };
     }
+    // Alt-letter: ESC + letter
+    if (b1 >= 0x61 && b1 <= 0x7a) {
+      return { key: `alt-${String.fromCharCode(b1)}`, consumed: 2 };
+    }
     return { key: 'esc', consumed: 1 };
   }
 
@@ -1137,6 +1466,15 @@ function parseKey(buf) {
 }
 
 function handleKey(key, port) {
+  // Help overlay: ? toggles, Esc closes
+  if (appState.view.helpOpen) {
+    if (key === 'esc' || key === '?' || key === 'ctrl-q') {
+      appState.view.helpOpen = false;
+      scheduleRender();
+    }
+    return;
+  }
+
   // Modal: Esc closes
   if (appState.modal) {
     if (key === 'esc' || key === 'enter' || key === 'ctrl-q') {
@@ -1152,17 +1490,30 @@ function handleKey(key, port) {
     return;
   }
 
-  // Focus toggle
-  if (key === 'ctrl-up') {
+  // Global help toggle
+  if (key === '?') {
+    appState.view.helpOpen = true;
+    scheduleRender();
+    return;
+  }
+
+  // Ctrl-Up / Ctrl-Down: focus toggle when in events pane;
+  // in compose pane they become paragraph motion (handled in handleComposeKey).
+  if (key === 'ctrl-up' && appState.view.focus === 'events') {
+    // In events focus: Ctrl-Up is focus toggle (keep existing behaviour)
+    // Actually: original: ctrl-up → events focus, ctrl-down → compose focus.
+    // New rule: in events focus, ctrl-up/ctrl-down stay as focus toggles.
+    // In compose focus, ctrl-up/ctrl-down become paragraph motion (handleComposeKey handles them).
     appState.view.focus = 'events';
     scheduleRender();
     return;
   }
-  if (key === 'ctrl-down') {
+  if (key === 'ctrl-down' && appState.view.focus === 'events') {
     appState.view.focus = 'compose';
     scheduleRender();
     return;
   }
+  // When focus is 'compose', ctrl-up and ctrl-down fall through to handleComposeKey.
 
   if (appState.view.focus === 'events') {
     handleEventsKey(key, port);
@@ -1280,6 +1631,30 @@ function handleComposeKey(key, port) {
       process.stdout.write(clearScreen());
       scheduleRender();
       return;
+    // Word motion (Ctrl+Arrows)
+    case 'ctrl-left':
+      cursorWordLeft();
+      scheduleRender();
+      return;
+    case 'ctrl-right':
+      cursorWordRight();
+      scheduleRender();
+      return;
+    // Paragraph motion (Ctrl-Up/Down in compose focus)
+    case 'ctrl-up':
+      cursorParagraphUp();
+      scheduleRender();
+      return;
+    case 'ctrl-down':
+      cursorParagraphDown();
+      scheduleRender();
+      return;
+    // Line wrap toggle (Ctrl-\ and Alt-w as backup)
+    case 'ctrl-backslash':
+    case 'alt-w':
+      toggleWrap();
+      scheduleRender();
+      return;
   }
 
   // Cursor + text editing
@@ -1331,11 +1706,11 @@ function handleComposeKey(key, port) {
       insertChar('  ');
       break;
     case 'esc':
-      // No-op in compose mode (reserved for modal cancellation handled above)
+      // No-op in compose mode (reserved for modal/help cancellation handled above)
       break;
     default:
-      // Printable / utf-8
-      if (typeof key === 'string' && key.length >= 1 && !key.startsWith('esc') && !key.startsWith('raw') && !key.startsWith('ctrl')) {
+      // Printable / utf-8 (exclude alt- sequences to avoid inserting garbage)
+      if (typeof key === 'string' && key.length >= 1 && !key.startsWith('esc') && !key.startsWith('raw') && !key.startsWith('ctrl') && !key.startsWith('alt-')) {
         // Treat as text input
         insertChar(key);
       }

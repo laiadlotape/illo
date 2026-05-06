@@ -20,19 +20,20 @@ the human reads once more in the destination pane and submits.
 │   12:31 · sent      · "Drop it. Backup verified at /backups…│
 │   12:33 · stop      · waiting…                              │
 ├─────────────────────────────────────────────────────────────┤
-│ compose · lines: 4 · words: 23 · *unsaved                   │  compose status
+│ compose · lines: 4 · words: 23 · *unsaved · wrap:on         │  compose status
 │ ┌─────────────────────────────────────────────────────────┐ │
 │ │ Claude, after looking at the migration script,          │ │  compose pane
 │ │   1. Verify backup at /backups/users-2026-05-06         │ │  (~2/3)
 │ │   2. Run rollback if any row count differs█             │ │
 │ └─────────────────────────────────────────────────────────┘ │
-│ Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-X   │  hint (1 row)
+│ Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-Z …│  hint row 1 (primary)
+│ Ctrl-W word-back · Ctrl-U line-back · Ctrl-K kill-EOL · … │  hint row 2 (secondary)
 └─────────────────────────────────────────────────────────────┘
 ```
 
 The events log takes ~1/3 of the available rows; compose takes ~2/3. On
 narrow terminals (< 24 rows), the events log shrinks to 4 rows so compose
-keeps the room.
+keeps the room. The two-row hint footer is always visible at the bottom.
 
 ## Quick start
 
@@ -53,6 +54,9 @@ node /path/to/illo/bin/illo-tui.js
 
 ## Keybindings
 
+Press `?` at any time to open the full keybindings help overlay. `Esc` or `?`
+closes it.
+
 ### Compose pane (focus: compose)
 
 | Key | Action |
@@ -63,6 +67,8 @@ node /path/to/illo/bin/illo-tui.js
 | `Backspace` | Delete char left (joins lines at col 0) |
 | `Delete` | Delete char right (joins next line at end) |
 | `←` `→` `↑` `↓` | Move cursor (with line-wrap on horizontal motion) |
+| `Ctrl-←` / `Ctrl-→` | Jump cursor left / right by one word (`[A-Za-z0-9_]` boundary); wraps to prev/next line at line boundaries |
+| `Ctrl-↑` / `Ctrl-↓` | Paragraph motion: jump to previous / next blank line |
 | `Home` / `End` | Beginning / end of line |
 | `PgUp` / `PgDn` | Scroll one screen |
 | `Ctrl-A` | Beginning of line (alias for `Home`) |
@@ -76,7 +82,9 @@ node /path/to/illo/bin/illo-tui.js
 | `Ctrl-D` | Send + press Enter (skip the human review step) |
 | `Ctrl-E` | Open `$EDITOR` (or `nano`) on the buffer |
 | `Ctrl-X` | Clear compose buffer |
-| `Ctrl-Up` | Move focus to events log |
+| `Ctrl-\` / `Alt-w` | Toggle line wrap on/off (preference persisted to `tui-prefs.json`) |
+| `Ctrl-Up` | **Paragraph motion** (in compose focus — see note below) |
+| `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit (also `Ctrl-C`) |
 
 ### Events log (focus: events)
@@ -90,8 +98,77 @@ node /path/to/illo/bin/illo-tui.js
 | `x` | Clear resolved events from the log view |
 | `Enter` | Open detail modal (kind, urgency, snippet, transcript snapshot first 6 lines) |
 | `Esc` | Close modal |
+| `Ctrl-Up` | Move focus to events log (no-op if already in events) |
 | `Ctrl-Down` | Move focus back to compose |
+| `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit |
+
+### Ctrl-Up / Ctrl-Down conflict resolution
+
+`Ctrl-Up` and `Ctrl-Down` were originally the global focus-toggle keys
+(compose ↔ events). In v0.3.1+ they are **context-sensitive**:
+
+- **Focus is on events**: `Ctrl-Up` and `Ctrl-Down` continue to behave as
+  focus toggles (same as before — no change for users who stay in the events
+  pane).
+- **Focus is on compose**: `Ctrl-Up` and `Ctrl-Down` become **paragraph
+  motion** (jump to the previous / next blank line), which is far more useful
+  during text composition. To move focus from compose to events, press
+  `Ctrl-Up` — but since you are in compose focus it fires paragraph motion
+  first. Use the sequence: press `Ctrl-Up` repeatedly (moves through
+  paragraphs) or use the mouse / `Ctrl-Down` from events. For a direct
+  compose-to-events jump without paragraph side effects, the events header
+  row ("Ctrl-Up focus") documents the existing shortcut — it still works as
+  intended when you are already in the events view.
+
+In practice, most users move focus with `Ctrl-Up` from events or by clicking
+into the compose box, so the compose-pane paragraph motion is a net addition
+with no functional regression.
+
+## Hint footer
+
+The bottom two rows of the screen are always occupied by a hint footer:
+
+- **Row N-1 (primary)**: The key chords are in bright white (`color(255)`),
+  descriptions in `color(245)`. No `dim()` attribute — readable on both dark
+  and light backgrounds. Content: `Ctrl-S send · Ctrl-D send+Enter · Ctrl-E
+  $EDITOR · Ctrl-Z undo · ? help`.
+- **Row N (secondary)**: Contextual for the current focus pane. In compose
+  focus: movement, kill, wrap, and quit keys. In events focus: scroll,
+  filter, and detail keys. `color(245)` throughout.
+
+The secondary row is truncated gracefully if the terminal is narrow — trailing
+groups are dropped first.
+
+## Line wrap
+
+Wrap mode controls whether long lines in the compose buffer are soft-wrapped
+at the box width or scroll horizontally.
+
+- **Default**: wrap on (`appState.compose.wrap = true`).
+- **Toggle**: `Ctrl-\` (xterm sequence `0x1c`). Backup binding: `Alt-w` (for
+  terminals that intercept `Ctrl-\` as SIGQUIT — e.g. some tmux configurations
+  strip it). Both bindings toggle the same state.
+- **Persistence**: the preference is written to
+  `~/.claude/illo-sidebar/tui-prefs.json` (`{ "composeWrap": true|false }`)
+  directly from the TUI. No daemon round-trip is needed because wrap is a
+  purely local display preference.
+- **Status bar**: `wrap:on` / `wrap:off` is shown in the compose status line.
+
+When wrap is on:
+- Each logical line is rendered as one or more visual rows of `innerCols`
+  characters (`cols - 4`).
+- The cursor block (`█`) appears on the correct visual row; at the wrap point
+  it is placed on the *next* visual row at position 0 (not at position
+  `innerCols`).
+- PgUp/PgDn move by logical rows (same as before) — visual screenfuls are
+  not implemented for PgUp/PgDn to keep the implementation simple.
+- Vertical viewport scrolling adjusts so the cursor's visual row is always
+  on screen.
+
+When wrap is off (original behaviour): the horizontal `colOffset` is used
+exactly as before — the line scrolls right as the cursor moves past the box
+edge.
 
 ### Undo behavior
 

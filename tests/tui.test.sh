@@ -172,6 +172,27 @@ else
   fail "Expected stop kind to be filtered out under low-noise, but appeared: $LAST_LINE"
 fi
 
+# v0.3.1: --no-tty snapshot should include hintPrimary containing "Ctrl-S send".
+if grep -q '"hintPrimary"' "$TUI_OUT"; then
+  pass "TUI --no-tty snapshot has hintPrimary field"
+else
+  fail "TUI --no-tty snapshot missing hintPrimary field"
+fi
+
+HINT_VAL=$(grep '"hintPrimary"' "$TUI_OUT" | tail -1 | grep -o '"hintPrimary":"[^"]*"' | sed 's/"hintPrimary":"//;s/"$//')
+if echo "$HINT_VAL" | grep -q "Ctrl-S send"; then
+  pass "hintPrimary includes 'Ctrl-S send'"
+else
+  fail "hintPrimary does not include 'Ctrl-S send'; got: $HINT_VAL"
+fi
+
+# v0.3.1: wrap preference field present in --no-tty snapshot.
+if grep -q '"composeWrap"' "$TUI_OUT"; then
+  pass "TUI --no-tty snapshot has composeWrap field"
+else
+  fail "TUI --no-tty snapshot missing composeWrap field"
+fi
+
 # ── 5. Send EOF to TUI — assert it exits 0 ───────────────────────────────────
 # TUI reads stdin; closing it triggers exit in --no-tty mode
 # We kill stdin by sending EOF via the process group
