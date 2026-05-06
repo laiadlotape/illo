@@ -7,15 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- TUI compose: `Ctrl+←` / `Ctrl+→` for word motion (jumps by `[A-Za-z0-9_]` boundary, wraps at line edges). `Ctrl+↑` / `Ctrl+↓` for paragraph motion (jumps to previous/next blank line) when focus is in the compose pane. When focus is in the events pane, `Ctrl+↑` / `Ctrl+↓` retain the original focus-toggle behaviour. See `docs/tui.md` for the conflict-resolution rationale.
-- TUI: always-visible two-row hint footer. Primary row (N-1): `Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-Z undo · ? help`. Secondary row (N): contextual keybindings for the active focus pane. Both rows use `color(245)` / `color(255)` — no `dim()` attribute. Hint text is truncated gracefully on narrow terminals. `?` (or pressing `Esc` on the overlay) opens a full keybindings help overlay listing every binding.
-- TUI compose: line wrap toggle (`Ctrl-\` primary binding; `Alt-w` as backup for terminals that swallow `Ctrl-\` as SIGQUIT). Wrap is **on by default** — the more friendly default for prose-heavy prompts. Preference persisted to `~/.claude/illo-sidebar/tui-prefs.json` directly from the TUI (no daemon round-trip needed since this is a TUI-only display preference). Status shown as `wrap:on` / `wrap:off` in the compose status line.
-
-### Changed
-
-- TUI hint colors brightened: primary hint row uses `color(255)` for key chords and `color(245)` for descriptions; secondary hint row uses `color(245)` throughout. The `dim()` ANSI attribute has been removed from all hint rendering. New palette entry `C.hint = 245`.
+- TUI event-detail popup: long lines now wrap at the popup width with 2-col inner margins; popup uses ~80% × ~60% of the terminal with a Unicode border and subtle drop shadow; content is scrollable with Up/Down and PgUp/PgDn (#31).
 
 
 ## [0.3.0] - 2026-05-06

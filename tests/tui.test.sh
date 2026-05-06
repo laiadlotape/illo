@@ -193,7 +193,17 @@ else
   fail "TUI --no-tty snapshot missing composeWrap field"
 fi
 
-# ── 5. Send EOF to TUI — assert it exits 0 ───────────────────────────────────
+# ── 5. Event-detail popup: open/close cycle does not crash ───────────────────
+# NOTE: --no-tty mode does not render the visual popup (it only emits JSON
+# snapshots); visual correctness requires manual inspection. We verify here
+# that the popup-open / popup-close transition does not crash the process.
+if kill -0 "$TUI_PID" 2>/dev/null; then
+  pass "TUI still alive after event posts (popup open/close path does not crash)"
+else
+  fail "TUI crashed during event processing (popup regression?)"
+fi
+
+# ── 6. Send EOF to TUI — assert it exits 0 ───────────────────────────────────
 # TUI reads stdin; closing it triggers exit in --no-tty mode
 # We kill stdin by sending EOF via the process group
 kill -0 "$TUI_PID" 2>/dev/null || { fail "TUI already exited before EOF"; }

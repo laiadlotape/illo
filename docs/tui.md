@@ -96,8 +96,10 @@ closes it.
 | `PgUp` / `PgDn` | Scroll five events |
 | `v` | Toggle filter: low-noise (default) ↔ verbose |
 | `x` | Clear resolved events from the log view |
-| `Enter` | Open detail modal (kind, urgency, snippet, transcript snapshot first 6 lines) |
-| `Esc` | Close modal |
+| `Enter` | Open event-detail popup (kind, urgency, snippet, transcript snapshot — wrapping, scrollable) |
+| `Esc` / `q` | Close event-detail popup |
+| `↑` / `↓` | Scroll popup content one line (while popup is open) |
+| `PgUp` / `PgDn` | Scroll popup content one screen (while popup is open) |
 | `Ctrl-Up` | Move focus to events log (no-op if already in events) |
 | `Ctrl-Down` | Move focus back to compose |
 | `?` | Open full keybindings help overlay |

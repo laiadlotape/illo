@@ -65,19 +65,23 @@ function dim()          { return `${CSI}2m`; }
 function reverse()      { return `${CSI}7m`; }
 function color(n)       { return `${CSI}38;5;${n}m`; }
 function eraseLine()    { return `${CSI}2K`; }
+function bgColor(n)     { return `${CSI}48;5;${n}m`; }
 
 // Palette
 const C = {
-  amber:   214,
-  red:     203,
-  gray:    245,
-  green:   114,
-  dim_c:   240,
-  white:   255,
-  blue:    111,
-  yellow:  227,
-  cyan:    109,
-  hint:    245,  // secondary hint row; no dim() applied
+  amber:       214,
+  red:         203,
+  gray:        245,
+  green:       114,
+  dim_c:       240,
+  white:       255,
+  blue:        111,
+  yellow:      227,
+  cyan:        109,
+  hint:        245,  // secondary hint row; no dim() applied
+  popup:       236,
+  popupShadow: 234,
+  popupBorder: 245,
 };
 
 function kindColor(kind) {
@@ -106,6 +110,28 @@ function truncate(str, width) {
 function pad(str, width) {
   const s = String(str);
   return s.length >= width ? s.slice(0, width) : s + ' '.repeat(width - s.length);
+}
+
+// Wrap text at word boundaries; falls back to hard-break for words wider than width.
+function wrapText(text, width) {
+  if (!text || width <= 0) return [''];
+  const out = [];
+  for (const rawLine of String(text).split('\n')) {
+    if (rawLine.length === 0) { out.push(''); continue; }
+    let remaining = rawLine;
+    while (remaining.length > 0) {
+      if (remaining.length <= width) {
+        out.push(remaining);
+        break;
+      }
+      // Find last space within width
+      let cut = remaining.lastIndexOf(' ', width);
+      if (cut <= 0) cut = width; // hard-break
+      out.push(remaining.slice(0, cut));
+      remaining = remaining.slice(cut).replace(/^ /, '');
+    }
+  }
+  return out;
 }
 
 // ─── terminal size ────────────────────────────────────────────────────────────
@@ -237,8 +263,9 @@ const appState = {
     typingGroupOpen: false,
   },
 
-  toast: null,    // { text, expiresAt }
-  modal: null,    // { type:'event-detail', eventId } | { type:'message', text }
+  toast: null,        // { text, expiresAt }
+  modal: null,        // { type:'event-detail', eventId } | { type:'message', text }
+  eventDetail: null,  // { itemId, scroll } | null
 };
 
 // ─── compose helpers ──────────────────────────────────────────────────────────
@@ -952,6 +979,11 @@ function render() {
     renderModal(out, rows, cols);
   }
 
+  // ── event-detail popup ──────────────────────────────────────────────────
+  if (appState.eventDetail) {
+    renderEventDetail(out, rows, cols);
+  }
+
   // ── help overlay ────────────────────────────────────────────────────────
   if (appState.view.helpOpen) {
     renderHelp(out, rows, cols);
@@ -1051,6 +1083,135 @@ function renderHelp(out, rows, cols) {
 
   out.push(moveTo(startRow + h, startCol)
     + color(C.hint) + ' [?] or [Esc] close' + resetAttrs());
+}
+
+function renderEventDetail(out, rows, cols) {
+  const detail = appState.eventDetail;
+  if (!detail) return;
+
+  const ev = appState.events.find((it) => it.id === detail.itemId);
+  if (!ev) return;
+
+  // ── Popup sizing: ~80% width × ~60% height, clamped ─────────────────────
+  const popupWidth  = Math.max(30, Math.min(Math.floor(cols * 0.8), cols - 4));
+  const popupHeight = Math.max(8,  Math.min(Math.floor(rows * 0.6), rows - 4));
+
+  // Content area: inner padding = 2 cols horizontal, 1 row vertical
+  const popupContentWidth = popupWidth - 4; // 2 margin × 2 sides
+  const bodyHeight = popupHeight - 4;        // top border + 1 padding + bottom border + 1 padding
+
+  // ── Gather all content lines (wrapped) ──────────────────────────────────
+  const allLines = [];
+  // Title section
+  allLines.push(...wrapText(`[${ev.kind}] ${eventTitle(ev)}`, popupContentWidth));
+  // Metadata
+  allLines.push('');
+  allLines.push(`urgency: ${ev.urgency || 'normal'}`);
+  if (ev.sessionId) allLines.push(`session: ${ev.sessionId}`);
+  // Snippet
+  if (ev.snippet) {
+    allLines.push('');
+    allLines.push('— snippet —');
+    allLines.push(...wrapText(ev.snippet, popupContentWidth));
+  }
+  // Transcript snapshot
+  if (ev.transcriptSnapshot) {
+    allLines.push('');
+    allLines.push('— transcript snapshot —');
+    for (const ln of ev.transcriptSnapshot.split('\n').slice(0, 30)) {
+      allLines.push(...wrapText(ln, popupContentWidth));
+    }
+  }
+
+  // ── Clamp scroll ─────────────────────────────────────────────────────────
+  const maxScroll = Math.max(0, allLines.length - bodyHeight);
+  detail.scroll = Math.max(0, Math.min(detail.scroll, maxScroll));
+
+  const startRow = Math.max(2, Math.floor((rows - popupHeight) / 2));
+  const startCol = Math.max(2, Math.floor((cols - popupWidth)  / 2));
+
+  // ── Drop shadow (one row below + one col right) ───────────────────────────
+  const shadowRow = startRow + popupHeight;
+  const shadowCol = startCol + 1;
+  if (shadowRow <= rows) {
+    out.push(moveTo(shadowRow, shadowCol)
+      + bgColor(C.popupShadow) + color(C.popupShadow)
+      + ' '.repeat(Math.min(popupWidth, cols - shadowCol + 1))
+      + resetAttrs());
+  }
+  for (let r = 1; r < popupHeight; r++) {
+    const sr = startRow + r;
+    const sc = startCol + popupWidth;
+    if (sr <= rows && sc <= cols) {
+      out.push(moveTo(sr, sc)
+        + bgColor(C.popupShadow) + color(C.popupShadow) + '  ' + resetAttrs());
+    }
+  }
+
+  // ── Title bar (top border) ────────────────────────────────────────────────
+  const titleLabel = ` event · ${ev.kind} `;
+  const dashCount = Math.max(0, popupWidth - 2 - titleLabel.length);
+  out.push(moveTo(startRow, startCol)
+    + bgColor(C.popup) + color(C.popupBorder)
+    + '┌' + truncate(titleLabel, popupWidth - 2) + '─'.repeat(dashCount)
+    + '┐' + resetAttrs());
+
+  // ── Inner top padding row ─────────────────────────────────────────────────
+  out.push(moveTo(startRow + 1, startCol)
+    + bgColor(C.popup) + color(C.popupBorder)
+    + '│' + ' '.repeat(popupWidth - 2) + '│' + resetAttrs());
+
+  // ── Scroll indicator: top ─────────────────────────────────────────────────
+  if (detail.scroll > 0) {
+    const indicator = ' ↑ more ';
+    const col = startCol + Math.floor((popupWidth - indicator.length) / 2);
+    out.push(moveTo(startRow + 1, col)
+      + bgColor(C.popup) + color(C.hint) + indicator + resetAttrs());
+  }
+
+  // ── Body rows ─────────────────────────────────────────────────────────────
+  const visibleLines = allLines.slice(detail.scroll, detail.scroll + bodyHeight);
+  for (let i = 0; i < bodyHeight; i++) {
+    const rowNum = startRow + 2 + i; // +2: border + padding
+    const lineIdx = i;               // relative to visibleLines
+    const rawLine = visibleLines[lineIdx] || '';
+    // Determine if this is within the title block (first wrapped lines)
+    const titleLineCount = wrapText(`[${ev.kind}] ${eventTitle(ev)}`, popupContentWidth).length;
+    const absoluteIdx = detail.scroll + i;
+    const isTitle = absoluteIdx < titleLineCount;
+
+    const textColor = isTitle ? bold() + color(C.white) : color(C.hint);
+    const padded = rawLine + ' '.repeat(Math.max(0, popupContentWidth - rawLine.length));
+
+    out.push(moveTo(rowNum, startCol)
+      + bgColor(C.popup) + color(C.popupBorder) + '│' + resetAttrs()
+      + bgColor(C.popup) + '  ' + textColor + padded + resetAttrs()
+      + bgColor(C.popup) + '  ' + color(C.popupBorder) + '│' + resetAttrs());
+  }
+
+  // ── Inner bottom padding row + scroll indicator: bottom ──────────────────
+  const bottomPadRow = startRow + 2 + bodyHeight;
+  out.push(moveTo(bottomPadRow, startCol)
+    + bgColor(C.popup) + color(C.popupBorder)
+    + '│' + ' '.repeat(popupWidth - 2) + '│' + resetAttrs());
+  if (detail.scroll < maxScroll) {
+    const indicator = ' ↓ more ';
+    const col = startCol + Math.floor((popupWidth - indicator.length) / 2);
+    out.push(moveTo(bottomPadRow, col)
+      + bgColor(C.popup) + color(C.hint) + indicator + resetAttrs());
+  }
+
+  // ── Bottom border ─────────────────────────────────────────────────────────
+  out.push(moveTo(startRow + popupHeight - 1, startCol)
+    + bgColor(C.popup) + color(C.popupBorder)
+    + '└' + '─'.repeat(Math.max(0, popupWidth - 2)) + '┘' + resetAttrs());
+
+  // ── Footer hint ───────────────────────────────────────────────────────────
+  const footerRow = startRow + popupHeight;
+  if (footerRow <= rows) {
+    out.push(moveTo(footerRow, startCol + 1)
+      + dim() + color(C.dim_c) + ' [Esc/q] close · ↑↓ scroll · PgUp/PgDn' + resetAttrs());
+  }
 }
 
 // ─── No-TTY mode ──────────────────────────────────────────────────────────────
@@ -1475,6 +1636,69 @@ function handleKey(key, port) {
     return;
   }
 
+  // Event-detail popup: handle scrolling and close
+  if (appState.eventDetail) {
+    const detail = appState.eventDetail;
+    const { rows } = termSize();
+    const popupHeight = Math.max(8, Math.min(Math.floor(rows * 0.6), rows - 4));
+    const bodyHeight = popupHeight - 4;
+
+    // Compute total lines for clamping (reuse same logic as render)
+    const ev = appState.events.find((it) => it.id === detail.itemId);
+    let totalLines = 0;
+    if (ev) {
+      const popupWidth = Math.max(30, Math.min(Math.floor((process.stdout.columns || 80) * 0.8), (process.stdout.columns || 80) - 4));
+      const popupContentWidth = popupWidth - 4;
+      const allLines = [];
+      allLines.push(...wrapText(`[${ev.kind}] ${eventTitle(ev)}`, popupContentWidth));
+      allLines.push('');
+      allLines.push(`urgency: ${ev.urgency || 'normal'}`);
+      if (ev.sessionId) allLines.push(`session: ${ev.sessionId}`);
+      if (ev.snippet) {
+        allLines.push('');
+        allLines.push('— snippet —');
+        allLines.push(...wrapText(ev.snippet, popupContentWidth));
+      }
+      if (ev.transcriptSnapshot) {
+        allLines.push('');
+        allLines.push('— transcript snapshot —');
+        for (const ln of ev.transcriptSnapshot.split('\n').slice(0, 30)) {
+          allLines.push(...wrapText(ln, popupContentWidth));
+        }
+      }
+      totalLines = allLines.length;
+    }
+    const maxScroll = Math.max(0, totalLines - bodyHeight);
+
+    if (key === 'esc' || key === 'q') {
+      appState.eventDetail = null;
+      scheduleRender();
+      return;
+    }
+    if (key === 'up' || key === 'k') {
+      detail.scroll = Math.max(0, detail.scroll - 1);
+      scheduleRender();
+      return;
+    }
+    if (key === 'down' || key === 'j') {
+      detail.scroll = Math.min(maxScroll, detail.scroll + 1);
+      scheduleRender();
+      return;
+    }
+    if (key === 'pgup') {
+      detail.scroll = Math.max(0, detail.scroll - bodyHeight);
+      scheduleRender();
+      return;
+    }
+    if (key === 'pgdn') {
+      detail.scroll = Math.min(maxScroll, detail.scroll + bodyHeight);
+      scheduleRender();
+      return;
+    }
+    // Any other key is swallowed while popup is open
+    return;
+  }
+
   // Modal: Esc closes
   if (appState.modal) {
     if (key === 'esc' || key === 'enter' || key === 'ctrl-q') {
@@ -1552,27 +1776,11 @@ function handleEventsKey(key, port) {
       showToast('cleared resolved events from log view');
       break;
     case 'enter': {
-      // Open detail modal for currently focused event
+      // Open event-detail popup for currently focused event
       const idx = evs.length - 1 - v.eventScroll;
       const ev = evs[idx];
       if (!ev) return;
-      const lines = [];
-      lines.push(`kind:    ${ev.kind}`);
-      lines.push(`urgency: ${ev.urgency}`);
-      if (ev.sessionId) lines.push(`session: ${ev.sessionId}`);
-      lines.push('');
-      lines.push(eventTitle(ev));
-      if (ev.snippet) {
-        lines.push('');
-        lines.push(ev.snippet);
-      }
-      if (ev.transcriptSnapshot) {
-        lines.push('');
-        lines.push('— transcript snapshot —');
-        const snap = ev.transcriptSnapshot.split('\n').slice(0, 6);
-        for (const ln of snap) lines.push(ln);
-      }
-      appState.modal = { type: 'event-detail', title: 'event ' + ev.kind, lines };
+      appState.eventDetail = { itemId: ev.id, scroll: 0 };
       break;
     }
     default:
