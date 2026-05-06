@@ -53,6 +53,10 @@ class IlloSidebar:
         snippet: Optional[str] = None,
         payload: Optional[dict] = None,
         quick_reply_enabled: bool = True,
+        cwd: Optional[str] = None,
+        project_name: Optional[str] = None,
+        git_branch: Optional[str] = None,
+        git_worktree: Optional[str] = None,
     ) -> Optional[dict]:
         opts = [{"label": o} for o in (options or [])]
         return self._post_event(
@@ -65,6 +69,10 @@ class IlloSidebar:
                 "transcript_snapshot": transcript,
                 "quick_reply_enabled": quick_reply_enabled,
                 "payload": payload,
+                "cwd": cwd,
+                "project_name": project_name,
+                "git_branch": git_branch,
+                "git_worktree": git_worktree,
             }
         )
 
@@ -75,6 +83,10 @@ class IlloSidebar:
         subkind: Optional[str] = None,
         transcript: Optional[str] = None,
         payload: Optional[dict] = None,
+        cwd: Optional[str] = None,
+        project_name: Optional[str] = None,
+        git_branch: Optional[str] = None,
+        git_worktree: Optional[str] = None,
     ) -> Optional[dict]:
         return self._post_event(
             {
@@ -84,6 +96,10 @@ class IlloSidebar:
                 "urgency": urgency,
                 "transcript_snapshot": transcript,
                 "payload": payload,
+                "cwd": cwd,
+                "project_name": project_name,
+                "git_branch": git_branch,
+                "git_worktree": git_worktree,
             }
         )
 

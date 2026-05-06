@@ -33,6 +33,10 @@ export interface AskArgs {
   snippet?: string;
   payload?: Record<string, unknown>;
   quickReplyEnabled?: boolean;
+  cwd?: string;
+  projectName?: string;
+  gitBranch?: string;
+  gitWorktree?: string;
 }
 
 export interface NotifyArgs {
@@ -41,6 +45,10 @@ export interface NotifyArgs {
   subkind?: string;
   transcript?: string;
   payload?: Record<string, unknown>;
+  cwd?: string;
+  projectName?: string;
+  gitBranch?: string;
+  gitWorktree?: string;
 }
 
 export class IlloSidebar {
@@ -81,6 +89,10 @@ export class IlloSidebar {
       transcript_snapshot: args.transcript,
       quick_reply_enabled: args.quickReplyEnabled ?? true,
       payload: args.payload,
+      cwd: args.cwd,
+      project_name: args.projectName,
+      git_branch: args.gitBranch,
+      git_worktree: args.gitWorktree,
     });
   }
 
@@ -92,6 +104,10 @@ export class IlloSidebar {
       urgency: args.urgency ?? "normal",
       transcript_snapshot: args.transcript,
       payload: args.payload,
+      cwd: args.cwd,
+      project_name: args.projectName,
+      git_branch: args.gitBranch,
+      git_worktree: args.gitWorktree,
     });
   }
 

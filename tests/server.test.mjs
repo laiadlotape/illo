@@ -506,3 +506,125 @@ describe('VCR: ingest does not throw when recording is false', () => {
     assert.equal(item.kind, 'notification');
   });
 });
+
+// ---------- enriched fields (issue #6) ----------
+describe('enriched fields', () => {
+  it('ask_user item carries cwd, projectName, gitBranch, gitWorktree from envelope', () => {
+    const item = ingest({
+      kind: 'ask_user',
+      tool_input: { questions: [{ question: 'Deploy?' }] },
+      cwd: '/home/user/projects/myapp',
+      project_name: 'myapp',
+      git_branch: 'fix/issue-6',
+      git_worktree: '/home/user/projects/myapp',
+    });
+    assert.equal(item.cwd, '/home/user/projects/myapp');
+    assert.equal(item.projectName, 'myapp');
+    assert.equal(item.gitBranch, 'fix/issue-6');
+    assert.equal(item.gitWorktree, '/home/user/projects/myapp');
+  });
+
+  it('notification item carries cwd, projectName, gitBranch, gitWorktree from envelope', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'May I write file X?',
+      cwd: '/home/user/projects/myapp',
+      project_name: 'myapp',
+      git_branch: 'main',
+      git_worktree: '/home/user/projects/myapp',
+    });
+    assert.equal(item.cwd, '/home/user/projects/myapp');
+    assert.equal(item.projectName, 'myapp');
+    assert.equal(item.gitBranch, 'main');
+    assert.equal(item.gitWorktree, '/home/user/projects/myapp');
+  });
+
+  it('enriched fields default to null when absent', () => {
+    const item = ingest({
+      kind: 'ask_user',
+      tool_input: { questions: [{ question: 'Null fields?' }] },
+    });
+    assert.equal(item.cwd, null);
+    assert.equal(item.projectName, null);
+    assert.equal(item.gitBranch, null);
+    assert.equal(item.gitWorktree, null);
+  });
+
+  it('notification: generic title "Claude is waiting" is replaced by assistant transcript line', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'Claude is waiting for your input',
+      transcript_snapshot: 'user: hello\nassistant: I need your approval to proceed with the deployment.\nsome other line',
+    });
+    assert.ok(
+      item.title.includes('I need your approval'),
+      `title should be derived from assistant line, got: "${item.title}"`
+    );
+    assert.ok(item.title.length <= 80, `title should be at most 80 chars, got ${item.title.length}`);
+  });
+
+  it('notification: generic title "Waiting for your input" (case-insensitive) triggers derivation', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'WAITING FOR YOUR INPUT',
+      transcript_snapshot: 'assistant: Please confirm the operation.\nuser: ok',
+    });
+    // Last assistant line comes before "user: ok", so assistant: is found.
+    assert.ok(
+      item.title.includes('Please confirm'),
+      `expected derived title, got: "${item.title}"`
+    );
+  });
+
+  it('notification: generic title "needs your attention" triggers derivation', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'Claude needs your attention',
+      transcript_snapshot: 'assistant: What is your preferred output format?',
+    });
+    assert.ok(
+      item.title.includes('What is your preferred'),
+      `expected derived title, got: "${item.title}"`
+    );
+  });
+
+  it('notification: generic title with no snapshot keeps original title', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'Claude is waiting for your input',
+    });
+    assert.equal(item.title, 'Claude is waiting for your input');
+    // payload.original_title should not be set since no derivation happened
+    assert.ok(!item.payload || item.payload.original_title === undefined);
+  });
+
+  it('notification: non-generic title is not replaced even with snapshot', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'May I write to /etc/hosts?',
+      transcript_snapshot: 'assistant: I want to modify hosts file.',
+    });
+    assert.equal(item.title, 'May I write to /etc/hosts?');
+  });
+
+  it('notification: original_title is stored in payload when title is derived', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'Claude is waiting for your input',
+      transcript_snapshot: 'assistant: Running tests now, please confirm.',
+    });
+    assert.ok(
+      item.payload && item.payload.original_title === 'Claude is waiting for your input',
+      `original_title should be preserved in payload, got: ${JSON.stringify(item.payload)}`
+    );
+  });
+
+  it('notification: falls back to last non-empty line if no assistant: prefix found', () => {
+    const item = ingest({
+      kind: 'notification',
+      message: 'Waiting for your input',
+      transcript_snapshot: 'just a plain line\nanother plain line',
+    });
+    assert.equal(item.title, 'another plain line');
+  });
+});

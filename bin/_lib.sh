@@ -67,3 +67,20 @@ read_stdin() {
   input="$(cat || true)"
   if [[ -z "$input" ]]; then echo "{}"; else echo "$input"; fi
 }
+
+# Compute git enrichment fields for a given working directory.
+# Outputs four variables: GIT_CWD, GIT_PROJECT_NAME, GIT_BRANCH, GIT_WORKTREE.
+# All failures are silent; undetectable fields are set to empty string.
+resolve_git_context() {
+  local cwd="${1:-}"
+  GIT_CWD=""
+  GIT_PROJECT_NAME=""
+  GIT_BRANCH=""
+  GIT_WORKTREE=""
+
+  if [[ -z "$cwd" ]]; then return 0; fi
+  GIT_CWD="$cwd"
+  GIT_PROJECT_NAME="$(basename "$cwd" 2>/dev/null || true)"
+  GIT_BRANCH="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
+  GIT_WORKTREE="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+}
