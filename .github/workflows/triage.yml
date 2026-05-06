@@ -1,0 +1,33 @@
+name: Issue triage
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          prompt: |
+            Triage GitHub issue #${{ github.event.issue.number }} on the illo-sidebar repo.
+
+            Read the issue body via `gh issue view ${{ github.event.issue.number }}`.
+
+            Pull the existing label set via `gh label list`.
+
+            Decide:
+            1. Apply labels (any of: bug, enhancement, chore, high priority, low priority) via `gh issue edit ${{ github.event.issue.number }} --add-label <label>`.
+            2. If too vague (no repro / no environment / one-liner), post a comment via `gh issue comment ${{ github.event.issue.number }}` asking the standard clarifying questions: steps to reproduce, expected vs actual, environment (illo version, Node version, OS, tmux version, Claude Code version), daemon log excerpt.
+            3. If duplicates an open issue (`gh issue list --state open --json number,title,body`), post a comment linking it (no auto-close).
+
+            Be terse. Don't explain reasoning unless asking a clarifying question.
+          claude_args: --allowed-tools "Read,Bash(gh issue view *,gh issue list *,gh issue edit *,gh issue comment *,gh label list)"

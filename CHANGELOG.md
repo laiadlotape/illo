@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `.github/workflows/doc-drift.yml`: claude-code-action review on every PR for documentation drift (#19).
+- `.github/workflows/triage.yml`: auto-label and clarify newly-opened issues using claude-code-action (#20).
+- `.github/workflows/stale-prs.yml`: daily cron nag for PRs older than 7 days using claude-code-action (#21).
+- `.github/workflows/changelog-enforcer.yml`: PR gate — code changes must add an entry under CHANGELOG `[Unreleased]` (or include `[skip changelog]` in the PR body) (#22).
 - Enriched item context (project, git branch, cwd) on every Claude Code hook. Every item now carries `cwd`, `projectName`, `gitBranch`, and `gitWorktree` fields populated from the hook payload. The TUI agent-line renders as `<projectName> · <gitBranch> · <agentKind> · <session8>`, omitting any null fields (#6).
 - `cwd`, `project_name`, `git_branch`, `git_worktree` keyword args added to Python and TypeScript SDK `.ask()`, `.notify()`, and `.custom()` methods.
 - `GET /resume-targets` endpoint: lists all currently-queued resume files so

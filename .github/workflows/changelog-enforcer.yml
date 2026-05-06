@@ -1,0 +1,60 @@
+name: Changelog enforcer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for [Unreleased] additions
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          BASE="origin/${{ github.event.pull_request.base.ref }}"
+
+          # If PR body has [skip changelog], pass.
+          if echo "$PR_BODY" | grep -q '\[skip changelog\]'; then
+            echo "PR body has [skip changelog] — skipping enforcement."
+            exit 0
+          fi
+
+          EXEMPT='^(\.github/|tests/|docs/|README\.md|CHANGELOG\.md|CODE_OF_CONDUCT\.md|SECURITY\.md|CONTRIBUTING\.md|AUTHORS\.md|LICENSE|\.gitignore)'
+          CHANGED=$(git diff --name-only "$BASE"...HEAD)
+          NEEDS_CHANGELOG=$(echo "$CHANGED" | grep -Ev "$EXEMPT" || true)
+
+          if [ -z "$NEEDS_CHANGELOG" ]; then
+            echo "No code-affecting files changed; CHANGELOG not required."
+            exit 0
+          fi
+
+          echo "Code files changed:"
+          echo "$NEEDS_CHANGELOG" | sed 's/^/  - /'
+
+          # Verify CHANGELOG.md got new lines under [Unreleased]
+          # Extract added lines under [Unreleased] block by isolating that section in BOTH
+          # the base and HEAD versions and diffing.
+          extract_unreleased() {
+            awk '/^## \[Unreleased\]/{flag=1;next} /^## \[/{flag=0} flag' "$1"
+          }
+          git show "$BASE":CHANGELOG.md > /tmp/changelog.base 2>/dev/null || echo "" > /tmp/changelog.base
+          extract_unreleased /tmp/changelog.base > /tmp/unreleased.base
+          extract_unreleased CHANGELOG.md > /tmp/unreleased.head
+          ADDED_LINES=$(diff /tmp/unreleased.base /tmp/unreleased.head | grep -E '^> [^[:space:]]' || true)
+
+          if [ -n "$ADDED_LINES" ]; then
+            echo "CHANGELOG [Unreleased] has new entries:"
+            echo "$ADDED_LINES" | head -10 | sed 's/^/  /'
+            exit 0
+          fi
+
+          echo "::error::Code changes require a CHANGELOG.md [Unreleased] entry. Add one or include [skip changelog] in your PR body."
+          exit 1

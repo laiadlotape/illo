@@ -1,0 +1,49 @@
+name: Doc drift review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  doc-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compute changed files
+        id: changes
+        run: |
+          git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD > changed.txt
+      - name: Skip if no code changes
+        id: gate
+        run: |
+          if grep -qvE '^(README\.md|CHANGELOG\.md|docs/|\.github/|\.gitignore|LICENSE|CODE_OF_CONDUCT\.md|SECURITY\.md|AUTHORS\.md|CONTRIBUTING\.md|tests/)' changed.txt; then
+            echo "needs_review=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_review=false" >> $GITHUB_OUTPUT
+          fi
+      - uses: anthropics/claude-code-action@v1
+        if: steps.gate.outputs.needs_review == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          prompt: |
+            You are reviewing PR #${{ github.event.pull_request.number }} for documentation drift in the illo-sidebar plugin.
+
+            Read these docs (the docs of record):
+            - README.md, docs/protocol.md, docs/push.md, docs/tui.md, CHANGELOG.md ([Unreleased] section)
+
+            Read the PR diff (against `origin/${{ github.event.pull_request.base.ref }}`).
+
+            Identify whether any doc needs updates given the diff. For each doc that needs an update, post one bullet:
+            - <doc path> — <what changed in code that the doc no longer reflects, and a one-line proposed wording change>
+
+            If everything is in sync, post: "Docs look in sync with this PR."
+
+            Post as a single PR comment via `gh pr comment ${{ github.event.pull_request.number }}`. Informational only.
+          claude_args: --allowed-tools "Read,Glob,Grep,Bash(gh pr comment *,gh pr diff *)"
