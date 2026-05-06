@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/gif-record` skill: record the current tmux window to a gif with gentle keystroke overlay. Uses vhs (preferred) or asciinema+agg (fallback). Both are optional dependencies; install one-liners in `docs/gif-record.md`. Recordings go to `docs/recordings/` (gitignored). New: `bin/gif-record.sh`, `skills/gif-record/SKILL.md`, `commands/gif-record.md`, `docs/gif-record.md`, `tests/gif-record.test.sh` (#34).
 - TUI compose: bracketed paste support. Multi-line pastes arrive as a single undo group with newlines preserved and ANSI escapes stripped; auto-indent is suppressed for paste content. Cap: 1 MB per paste (#39).
+- `wave` skill: bootstraps a self-managing CronCreate-driven orchestration
+  loop. Tick every 5 min, hard 1-worker cap, resource brakes (load/disk/swap),
+  label-state machine, hybrid auto-merge with `safe:auto-merge` gate.
+  Self-disables when the queue is empty and no in-flight worker remains.
+  Closes #28.
+- Safe agentic GitHub upload pattern: single `laiadlotape` identity,
+  label-driven state machine (`status:*`, `agent:*`, `priority:*`,
+  `complexity:high`, `safe:auto-merge`, `claimed-by-*`, `wave:focus`),
+  worker template + reviewer template, no-orphan enforcement (issue→PR
+  within 24h, PR→issue immediate). Closes #29.
+- `bin/wave-*.sh` helpers: `wave-init-labels`, `wave-survey`,
+  `wave-resource-check`, `wave-find-next`, `wave-orphan-check`. All zero-dep
+  bash with `set -euo pipefail`.
+- `.claude/agents/<role>.md` briefs: `tui-dev`, `daemon-dev`, `doc-writer`,
+  `test-fixer`, `hooks-dev`, `reviewer`. Each role has a Scope, Allowed
+  paths, Standard process, Done criteria, Hard constraints section.
+- `.claude/skills/wave*/SKILL.md`: `wave`, `wave-tick`, `wave-stop`,
+  `wave-focus`.
+- Slash commands: `/wave`, `/wave-stop`, `/wave-focus`, `/wave-status`.
+- `docs/wave.md` — full operational guide (label state machine, lifecycle,
+  auto-merge path, no-orphan rule, manual unstick).
+- `docs/agents.md` — index of agent roles, scopes, allowed-paths
+  enforcement, model routing, how to add a new role.
+- `tests/wave-*.test.sh`: `wave-labels`, `wave-survey`, `wave-find-next`,
+  `wave-resource-check`. All four are dependency-free bash + python3, run
+  against fixtures or mocked `gh`.
 
 ### Changed
 
