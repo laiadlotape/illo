@@ -1,7 +1,7 @@
 {
   "name": "illo",
   "description": "CLI-native prompt notepad sidebar for Claude Code (and any HITL agent framework). Compose deliberately, send to the Claude pane via tmux without auto-pressing Enter.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": { "name": "illo" },
   "license": "MIT",
   "homepage": "https://github.com/lotape6/illo-sidebar",
