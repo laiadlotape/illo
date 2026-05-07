@@ -33,12 +33,12 @@ The text the user typed below is their reply to that.
 
 ## When the user asks "what am I behind on?" or "what's pending?"
 
-Call `/sb-status` (or fetch `http://127.0.0.1:<port>/state` directly) and
+Call `/illo-status` (or fetch `http://127.0.0.1:<port>/state` directly) and
 summarize the unresolved items. Don't dump the whole JSON.
 
 ## When the user wants to open the panel
 
-Call `/sb`. If they want a smaller footprint, tell them to press `b` inside
+Call `/illo`. If they want a smaller footprint, tell them to press `b` inside
 the sidebar window for compact-box mode.
 
 ## Constraints

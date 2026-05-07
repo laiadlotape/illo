@@ -696,7 +696,7 @@ function render() {
   // ── status bar (row 1) ──────────────────────────────────────────────────
   const paneStr = appState.paneId
     ? `pane: ${appState.paneId}`
-    : 'pane: <none — /sb-attach to set>';
+    : 'pane: <none — /illo-attach to set>';
   const focusStr = appState.view.focus === 'events' ? 'focus: events' : 'focus: compose';
   const dot = appState.connected
     ? `${color(C.green)}●${resetAttrs()}`
@@ -1310,7 +1310,7 @@ async function sendToPane(port, opts = { autoEnter: false }) {
   }
   if (!appState.paneId) discoverPane();
   if (!appState.paneId) {
-    showToast('no claude pane in this window — set with /sb-attach <pane_id>', 3500);
+    showToast('no claude pane in this window — set with /illo-attach <pane_id>', 3500);
     return;
   }
   const pane = appState.paneId;

@@ -1,5 +1,5 @@
 ---
-description: Resume a pending sidebar item by id (e.g. /sb-resume itm_abc123). With no arg, lists pending items.
+description: Resume a pending sidebar item by id (e.g. /illo-resume itm_abc123). With no arg, lists pending items.
 ---
 
 Arguments: $ARGUMENTS

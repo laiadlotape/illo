@@ -12,7 +12,7 @@ Find the pane id with `tmux list-panes -F '#{pane_id} #{pane_current_command}'`.
 PORT=$(cat "$HOME/.claude/illo-sidebar/daemon.port" 2>/dev/null || echo 7821)
 PANE_ID="$ARGUMENTS"
 if [[ -z "$PANE_ID" ]]; then
-  echo "usage: /sb-attach <pane_id>   (e.g. /sb-attach %4)"
+  echo "usage: /illo-attach <pane_id>   (e.g. /illo-attach %4)"
   exit 0
 fi
 curl -sS -X POST -H 'Content-Type: application/json' \
@@ -20,4 +20,4 @@ curl -sS -X POST -H 'Content-Type: application/json' \
   "http://127.0.0.1:${PORT}/config/pane-override" | jq .
 ```
 
-After running, tell the user: "illo TUI will now send compositions to $PANE_ID. Use /sb-detach to clear the override and return to auto-detection."
+After running, tell the user: "illo TUI will now send compositions to $PANE_ID. Use /illo-detach to clear the override and return to auto-detection."

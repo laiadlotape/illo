@@ -40,14 +40,14 @@ The same demo lives in `tests/dogfood.sh` and is invoked from CI.
 - `hooks/hooks.json` + `bin/*.sh` — event capture
 - `daemon/server.js` — Node, no deps; HTTP+WS on localhost
 - `bin/illo-tui.js` — **default sidebar**: terminal TUI client, spawned in a tmux split
-- `ui/` — vanilla HTML/CSS/JS sidebar (optional `/sb-web` fallback for headless/remote use)
-- `commands/` — `/sb` (TUI in tmux split), `/sb-web` (browser fallback), `/sb-resume`, `/sb-status`
+- `ui/` — vanilla HTML/CSS/JS sidebar (optional `/illo-web` fallback for headless/remote use)
+- `commands/` — `/illo` (TUI in tmux split), `/illo-web` (browser fallback), `/illo-resume`, `/illo-status`
 - `skills/sidebar-coordinator/SKILL.md` — guidance for Claude on resume flow
 - `tests/` — Playwright UX tests + dogfood script
 
 ## Sidebar surface rule
 
-The sidebar is a CLI thing. Default to the TUI; only open the browser when the user explicitly asks (`/sb-web`) or there is no terminal multiplexer available *and* the user opted into autoOpenWeb.
+The sidebar is a CLI thing. Default to the TUI; only open the browser when the user explicitly asks (`/illo-web`) or there is no terminal multiplexer available *and* the user opted into autoOpenWeb.
 
 ## Hard constraints
 

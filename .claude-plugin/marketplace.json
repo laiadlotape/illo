@@ -1,13 +1,13 @@
 {
   "name": "illo",
   "owner": { "name": "illo" },
-  "description": "Local marketplace hosting the illo-sidebar plugin.",
+  "description": "Local marketplace hosting the illo plugin.",
   "plugins": [
     {
-      "name": "illo-sidebar",
+      "name": "illo",
       "source": "./",
       "description": "CLI-native prompt notepad sidebar for Claude Code (and any HITL agent framework). Compose deliberately, send to the Claude pane via tmux without auto-pressing Enter.",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }

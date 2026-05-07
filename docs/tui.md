@@ -40,7 +40,7 @@ keeps the room. The two-row hint footer is always visible at the bottom.
 Inside tmux, from Claude Code:
 
 ```
-/sb
+/illo
 ```
 
 A 40%-wide vertical split opens on the right running `bin/illo-tui.js`.
@@ -204,23 +204,23 @@ On startup, the TUI runs `bin/tmux-send.sh discover` which calls
 whose `pane_current_command` is `claude` OR whose pid's process tree
 contains `claude` (excluding the illo TUI's own pane).
 
-If the daemon's `paneOverride` config is set (via `/sb-attach`), that
+If the daemon's `paneOverride` config is set (via `/illo-attach`), that
 wins — discovery is skipped.
 
 If discovery returns nothing, the status bar shows
-`pane: <none — /sb-attach to set>` and `Ctrl-S` toasts
-`no claude pane in this window — set with /sb-attach <pane_id>`.
+`pane: <none — /illo-attach to set>` and `Ctrl-S` toasts
+`no claude pane in this window — set with /illo-attach <pane_id>`.
 
 To pin a specific pane (or override a misdetection):
 
 ```
-/sb-attach %4
+/illo-attach %4
 ```
 
 To return to auto-detection:
 
 ```
-/sb-detach
+/illo-detach
 ```
 
 ## Send semantics
@@ -230,7 +230,7 @@ To return to auto-detection:
 1. Joins the compose buffer with `\n` into a single string `text`.
 2. If empty, toasts `(nothing to send)` and returns.
 3. If no `paneId` is known, retries discovery once. If still none, toasts
-   the `/sb-attach` hint.
+   the `/illo-attach` hint.
 4. Pipes the text to `bin/tmux-send.sh send <pane>`. The helper invokes
    `tmux send-keys -t <pane> -l -- "$text"` — `-l` disables key
    interpretation so backslashes, quotes, dollars, and newlines pass
@@ -276,7 +276,7 @@ the daemon — those still appear via `GET /state`).
 **"no claude pane in this window"**
 
 You're either outside tmux or the current window doesn't have a pane
-running `claude`. Open one (`tmux split-window claude`) or use `/sb-attach
+running `claude`. Open one (`tmux split-window claude`) or use `/illo-attach
 <pane_id>` to point at a `claude` running in another window.
 
 **Daemon not up**
@@ -308,6 +308,6 @@ iTerm2) qualify.
 
 ## Browser fallback
 
-If you can't use tmux, run `/sb-web` for the browser UI. Note that the
+If you can't use tmux, run `/illo-web` for the browser UI. Note that the
 browser surface still uses the v0.2 layout — it's tracked separately and
 will get the prompt-notepad treatment in a follow-up.

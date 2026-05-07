@@ -1,6 +1,6 @@
-# illo-sidebar — v0.3 — deliberate-prompting workbench for Claude Code (and any HITL agent)
+# illo — v0.4 — deliberate-prompting workbench for Claude Code (and any HITL agent)
 
-![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.3.0-f7b955)
+![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.4.0-f7b955)
 
 A Claude Code plugin (and standalone local daemon) whose default surface is a
 **prompt notepad** that lives in a tmux split next to the Claude pane. Compose
@@ -13,9 +13,14 @@ what Claude is waiting on without context-switching.
 > twice, dehumanize it. You are configuring a system, not chatting with a
 > colleague." — *FindingMemo*
 
-A browser fallback (`/sb-web`) is still available for headless / remote use.
+A browser fallback (`/illo-web`) is still available for headless / remote use.
 
 ---
+
+## What's new in v0.4
+
+- **Plugin renamed**: `illo-sidebar` → `illo`. Slash commands are now `/illo`, `/illo-web`, `/illo-attach`, `/illo-detach`, `/illo-status`, `/illo-resume`, `/illo-tui`. The plugin namespace is `illo:<cmd>`.
+- The daemon state directory (`~/.claude/illo-sidebar/`) is **not** renamed — existing history is preserved.
 
 ## What's new in v0.3
 
@@ -29,7 +34,7 @@ A browser fallback (`/sb-web`) is still available for headless / remote use.
 - **`Ctrl-E` opens `$EDITOR`** for long compositions; the buffer round-trips
   through a tmp file.
 - **Auto-detection of the claude pane** in the current tmux window. Override
-  with `/sb-attach <pane_id>`, clear with `/sb-detach`.
+  with `/illo-attach <pane_id>`, clear with `/illo-detach`.
 - **`POST /sent` + `sent` kind** in the protocol: every send is recorded in
   the event log so you can scroll back.
 - **`paneOverride` daemon config**: persisted, broadcast over WS, exposed in
@@ -37,14 +42,14 @@ A browser fallback (`/sb-web`) is still available for headless / remote use.
 
 ## What's still here from v0.2
 
-- **CLI-native TUI sidebar** (default) — opens in a tmux split via `/sb`.
-  Browser UI moved to optional `/sb-web` fallback.
+- **CLI-native TUI sidebar** (default) — opens in a tmux split via `/illo`.
+  Browser UI moved to optional `/illo-web` fallback.
 - **Generic protocol** — `POST /event` accepts events from Claude Code,
   LangGraph, CrewAI, OpenAI Codex, Aider, Cursor, OpenAI Agents SDK, or any
   custom script. The full v0.1 envelope is still accepted unchanged.
 - **Urgency tiers** — `urgency: low | normal | urgent`. Re-warn cadence scales
   with urgency (0.5× for urgent, 4× for low). Urgent items flash inline in the
-  TUI and also trigger browser desktop notifications (when using `/sb-web`).
+  TUI and also trigger browser desktop notifications (when using `/illo-web`).
 - **Snooze** — per-item snooze with presets (5 m / 15 m / 1 h / 4 h). Snoozed
   items appear in a dedicated filter view and re-surface automatically.
 - **Quick reply** — type a reply directly in the sidebar; `Cmd/Ctrl+Enter` sends
@@ -135,7 +140,7 @@ Any agent framework
            │  normalise → persist (state.json + sqlite or JSONL history)
            │  broadcast via WebSocket
            v
-  illo TUI event log   ←   browser fallback /sb-web (optional)
+  illo TUI event log   ←   browser fallback /illo-web (optional)
 ```
 
 ### Resume / quick-reply (still available, secondary to the editor)
@@ -162,7 +167,7 @@ This path is optimised for short corrective replies. The default workflow is **c
 
    ```json
    {
-     "plugins": ["illo-sidebar"],
+     "plugins": ["illo"],
      "hooks": {
        "hooksJsonPath": "/path/to/illo/hooks/hooks.json"
      }
@@ -192,7 +197,7 @@ This path is optimised for short corrective replies. The default workflow is **c
 2. Run the slash command to open the sidebar:
 
    ```
-   /sb
+   /illo
    ```
 
    **Inside tmux:** a 40%-wide vertical split opens on the right running the
@@ -211,12 +216,12 @@ This path is optimised for short corrective replies. The default workflow is **c
    `Enter` to open a detail modal, `Ctrl-Down` to return to compose.
 
    **Outside tmux:** the command prints clear guidance — start tmux and
-   re-run `/sb`, launch the TUI manually with
-   `node "$CLAUDE_PLUGIN_ROOT/bin/illo-tui.js"`, or use `/sb-web` for the
+   re-run `/illo`, launch the TUI manually with
+   `node "$CLAUDE_PLUGIN_ROOT/bin/illo-tui.js"`, or use `/illo-web` for the
    browser fallback.
 
 3. If auto-detection picks the wrong claude pane (or none), pin one with
-   `/sb-attach %N`. `/sb-detach` returns to auto-detection.
+   `/illo-attach %N`. `/illo-detach` returns to auto-detection.
 
 4. Ask Claude to do a multi-step task that triggers `AskUserQuestion`. The
    event log shows the question; compose your reply in the notepad and
@@ -237,15 +242,15 @@ curl -sX POST -H 'Content-Type: application/json' \
 
 | Command | What it does |
 |---|---|
-| `/sb` | Opens the prompt-notepad TUI in a tmux split (or guides you to open it). Default sidebar surface. |
-| `/sb-tui` | Alias for `/sb`. |
-| `/sb-attach <pane_id>` | Override the auto-detected claude pane. Use when detection picks the wrong pane (or you have multiple claude sessions). Example: `/sb-attach %4`. |
-| `/sb-detach` | Clear the pane override and return to auto-detection. |
-| `/sb-web` | Opens the browser UI fallback (~420 px wide window). Use when you can't use tmux or prefer the GUI. The browser surface still uses the v0.2 list view; prompt-notepad parity is tracked separately. |
-| `/sb-resume [item_id]` | With no argument, lists all unresolved items. With an id, marks it as the resume target. |
-| `/sb-status` | Prints daemon port, healthz response, total item count, and unresolved count. |
+| `/illo` | Opens the prompt-notepad TUI in a tmux split (or guides you to open it). Default sidebar surface. |
+| `/illo-tui` | Alias for `/illo`. |
+| `/illo-attach <pane_id>` | Override the auto-detected claude pane. Use when detection picks the wrong pane (or you have multiple claude sessions). Example: `/illo-attach %4`. |
+| `/illo-detach` | Clear the pane override and return to auto-detection. |
+| `/illo-web` | Opens the browser UI fallback (~420 px wide window). Use when you can't use tmux or prefer the GUI. The browser surface still uses the v0.2 list view; prompt-notepad parity is tracked separately. |
+| `/illo-resume [item_id]` | With no argument, lists all unresolved items. With an id, marks it as the resume target. |
+| `/illo-status` | Prints daemon port, healthz response, total item count, and unresolved count. |
 
-Example `/sb-status` output:
+Example `/illo-status` output:
 
 ```
 daemon port: 7821  {"ok":true,"version":"0.3.0"}
@@ -265,8 +270,8 @@ header) lets you edit `warnIntervalSeconds` and `warnStyle` live.
 |---|---|---|
 | `warnIntervalSeconds` | `300` | Seconds between re-warn animations on an unacknowledged item. 0 disables re-warn. |
 | `daemonPort` | `7821` | Localhost port the daemon binds to. Auto-increments if taken (up to +20). Actual port written to `daemon.port`. |
-| `autoOpenSidebar` | `true` | Open the sidebar automatically on `SessionStart`. With the TUI default, this is a no-op outside tmux unless `ILLO_SIDEBAR_AUTO_TERMINAL` is set; for the browser fallback, see `/sb-web`. |
-| `browserCommand` | `""` | Browser launcher used by `/sb-web` only. Empty = autodetect: chrome, chromium, brave, edge, firefox. |
+| `autoOpenSidebar` | `true` | Open the sidebar automatically on `SessionStart`. With the TUI default, this is a no-op outside tmux unless `ILLO_SIDEBAR_AUTO_TERMINAL` is set; for the browser fallback, see `/illo-web`. |
+| `browserCommand` | `""` | Browser launcher used by `/illo-web` only. Empty = autodetect: chrome, chromium, brave, edge, firefox. |
 | `warnStyle` | `"pulse"` | CSS animation for re-warn: `pulse`, `blink`, `glow`, `none`. |
 | `pushProvider` | `"off"` | Mobile push provider: `ntfy`, `pushover`, or `off`. Disabled by default. |
 | `pushNtfyTopic` | `""` | ntfy.sh topic name (only used when `pushProvider=ntfy`). |
@@ -282,7 +287,7 @@ Environment variable overrides (take precedence over the file):
 | `ILLO_SIDEBAR_WARN_STYLE` | `warnStyle` |
 | `ILLO_SIDEBAR_BROWSER` | `browserCommand` |
 | `ILLO_SIDEBAR_HOME` | State directory (default: `~/.claude/illo-sidebar`) |
-| `ILLO_SIDEBAR_AUTO_TERMINAL` | If set (e.g. `gnome-terminal`, `kitty`, `alacritty`, `wezterm`, `xterm`), `/sb` outside tmux spawns the TUI in that terminal. Default: empty (no auto-spawn). |
+| `ILLO_SIDEBAR_AUTO_TERMINAL` | If set (e.g. `gnome-terminal`, `kitty`, `alacritty`, `wezterm`, `xterm`), `/illo` outside tmux spawns the TUI in that terminal. Default: empty (no auto-spawn). |
 | `ILLO_SIDEBAR_PUSH_PUSHOVER_TOKEN` | Pushover app token (avoids sending over HTTP) |
 
 ---
@@ -291,7 +296,7 @@ Environment variable overrides (take precedence over the file):
 
 ### Sidebar TUI (default)
 
-Opens in a tmux split via `/sb`. Renders with pure ANSI escape codes — zero
+Opens in a tmux split via `/illo`. Renders with pure ANSI escape codes — zero
 npm deps.
 
 - **Selection model** — the `▶` marker tracks the focused item; navigate with
@@ -330,10 +335,10 @@ curl -sX POST -H 'Content-Type: application/json' \
 
 For the full keybinding reference see `docs/tui.md`.
 
-### Browser fallback (`/sb-web`)
+### Browser fallback (`/illo-web`)
 
 If you prefer a GUI, can't use tmux, or want the `/stats.html` dashboard, run
-`/sb-web`. The browser window is ~420 px wide and uses the same daemon
+`/illo-web`. The browser window is ~420 px wide and uses the same daemon
 WebSocket feed.
 
 #### Modes
@@ -642,12 +647,12 @@ optional; the daemon fills sensible defaults. New fields in v0.2: `agent_id`,
 ```
 illo/
 ├── .claude-plugin/
-│   ├── plugin.json          # manifest, userConfig schema (v0.3)
-│   └── marketplace.json     # local marketplace entry (v0.3)
+│   ├── plugin.json          # manifest, userConfig schema (v0.4)
+│   └── marketplace.json     # local marketplace entry (v0.4)
 ├── bin/
 │   ├── illo-tui.js          # v0.3 prompt-notepad TUI (default surface)
 │   ├── open-sidebar.sh      # TUI router: tmux split + claude-pane discovery
-│   ├── open-sidebar-web.sh  # browser fallback launcher (used by /sb-web)
+│   ├── open-sidebar-web.sh  # browser fallback launcher (used by /illo-web)
 │   ├── _tmux.sh             # tmux helpers (sourced): pane discovery + send-keys
 │   ├── tmux-send.sh         # CLI wrapper around _tmux.sh (used by the TUI)
 │   ├── _lib.sh              # shared helpers: daemon_port, ensure_daemon, push_event
@@ -669,13 +674,13 @@ illo/
 │       ├── multi-agent.jsonl # multi-agent interleaved scenario
 │       └── chaotic.jsonl    # rapid multi-agent chaos scenario
 ├── commands/
-│   ├── sb.md                # /sb (TUI default)
-│   ├── sb-tui.md            # alias for /sb
-│   ├── sb-attach.md         # /sb-attach <pane_id> — override claude-pane discovery
-│   ├── sb-detach.md         # /sb-detach — clear the override
-│   ├── sb-web.md            # /sb-web browser fallback
-│   ├── sb-resume.md         # /sb-resume slash command
-│   └── sb-status.md         # /sb-status slash command
+│   ├── illo.md              # /illo (TUI default)
+│   ├── illo-tui.md          # alias for /illo
+│   ├── illo-attach.md       # /illo-attach <pane_id> — override claude-pane discovery
+│   ├── illo-detach.md       # /illo-detach — clear the override
+│   ├── illo-web.md          # /illo-web browser fallback
+│   ├── illo-resume.md       # /illo-resume slash command
+│   └── illo-status.md       # /illo-status slash command
 ├── daemon/
 │   └── server.js            # Node 20+ stdlib HTTP+WS server, zero npm deps
 ├── docs/
@@ -704,7 +709,7 @@ illo/
 │   ├── _helper.mjs          # test env setup helper
 │   ├── playwright.config.js # Playwright configuration
 │   └── package.json         # test scripts + @playwright/test dep
-└── ui/                      # browser fallback (used by /sb-web only)
+└── ui/                      # browser fallback (used by /illo-web only)
     ├── index.html           # sidebar markup, item template (v0.2 elements)
     ├── app.js               # WebSocket client, render loop, actions (v0.2)
     ├── stats.html           # stats page
@@ -716,15 +721,15 @@ illo/
 
 ## Limitations
 
-- **TUI requires tmux for in-place split.** Outside tmux, `/sb` prints
+- **TUI requires tmux for in-place split.** Outside tmux, `/illo` prints
   instructions; set `ILLO_SIDEBAR_AUTO_TERMINAL` to auto-spawn in a known
-  terminal emulator, or use `/sb-web`.
+  terminal emulator, or use `/illo-web`.
 
 - **No global OS keyboard shortcut.** The `b` key binding works only when the
   sidebar window has focus (TUI pane or browser window).
 
 - **Cannot focus the terminal from the browser.** After clicking "resume here"
-  in `/sb-web`, the user must manually switch to the Claude CLI window.
+  in `/illo-web`, the user must manually switch to the Claude CLI window.
 
 - **Daemon is per-user, not per-session.** All Claude Code sessions on the
   machine share one daemon instance and one item list. Items are tagged with
@@ -739,9 +744,9 @@ illo/
   Check `~/.claude/illo-sidebar/daemon.log`.
 
 - **Firefox does not support `--app` mode.** Chromium-family browsers are
-  strongly preferred for `/sb-web`.
+  strongly preferred for `/illo-web`.
 
-- **`/sb-web` browser window position is heuristic.** `open-sidebar-web.sh`
+- **`/illo-web` browser window position is heuristic.** `open-sidebar-web.sh`
   hard-codes position `(1920 - 420 - 8, 8)` for a 1080p display. Reposition
   via your window manager.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open the sidebar TUI in a tmux split (or guide you to open it manually).
-# Default surface: CLI-native TUI. Browser fallback: /sb-web.
+# Default surface: CLI-native TUI. Browser fallback: /illo-web.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_lib.sh
@@ -60,7 +60,7 @@ if [[ -n "${TMUX:-}" ]]; then
   if [[ -n "$CLAUDE_PANE" ]]; then
     echo "illo: claude pane detected at $CLAUDE_PANE"
   else
-    echo "illo: no claude pane detected in this window — TUI will guide /sb-attach"
+    echo "illo: no claude pane detected in this window — TUI will guide /illo-attach"
   fi
   exit 0
 fi
@@ -70,12 +70,12 @@ echo ""
 echo "Sidebar TUI works best inside tmux. Either:"
 echo ""
 echo "  1. Run: tmux new-session"
-echo "     Then re-run: /sb"
+echo "     Then re-run: /illo"
 echo ""
 echo "  2. Manually open another terminal pane and run:"
 echo "     node $TUI_SCRIPT"
 echo ""
-echo "  3. Run /sb-web for the browser fallback"
+echo "  3. Run /illo-web for the browser fallback"
 echo ""
 
 # Honor explicit terminal env var (no auto-detection)
