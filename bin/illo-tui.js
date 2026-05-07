@@ -23,7 +23,7 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
@@ -44,6 +44,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const TMUX_SEND = path.join(PLUGIN_ROOT, 'bin', 'tmux-send.sh');
+const RECORD_SH = path.join(PLUGIN_ROOT, 'bin', 'record.sh');
+const REC_STATE_FILE = path.join(os.tmpdir(), 'illo-rec-state.txt');
 
 // ─── port discovery ──────────────────────────────────────────────────────────
 function discoverPort() {
@@ -285,6 +287,7 @@ const appState = {
   config: {},
   connected: false,
   reconnecting: false,
+  recording: false,
 
   view: {
     eventScroll: 0,
@@ -760,6 +763,7 @@ function render() {
     ? `${color(C.green)}●${resetAttrs()}`
     : `${color(C.red)}●${resetAttrs()}`;
   const reconn = appState.reconnecting ? `${color(C.red)} [reconnecting…]${resetAttrs()}` : '';
+  const recIndicator = appState.recording ? ` ${bold()}${color(196)}● REC${resetAttrs()}` : '';
 
   out.push(moveTo(1, 1) + eraseLine());
   out.push(bold() + color(C.amber) + ' illo' + resetAttrs());
@@ -767,6 +771,7 @@ function render() {
   out.push(color(C.dim_c) + ' · ' + paneStr + resetAttrs());
   out.push(color(C.dim_c) + ' · ' + focusStr + resetAttrs());
   out.push(reconn);
+  out.push(recIndicator);
   out.push('  ' + dot);
 
   // ── divider (row 2) ─────────────────────────────────────────────────────
@@ -1970,6 +1975,18 @@ function handleEventsKey(key, port) {
       appState.eventDetail = { itemId: ev.id, scroll: 0 };
       break;
     }
+    case 'r': {
+      // Toggle session recording via bin/record.sh
+      const proc = spawn('bash', [RECORD_SH, 'toggle'], { stdio: 'ignore' });
+      appState.recording = !appState.recording;
+      const msg = appState.recording
+        ? 'recording started'
+        : 'recording stopped — converting gif…';
+      showToast(msg);
+      proc.unref();
+      scheduleRender();
+      return;
+    }
     default:
       break;
   }
@@ -2137,6 +2154,9 @@ async function main() {
 
   // Pane discovery
   discoverPane();
+
+  // Sync recording indicator with any in-progress recording started before TUI launched
+  try { appState.recording = fs.existsSync(REC_STATE_FILE); } catch { /* non-fatal */ }
 
   // Connect WS
   connectWS(port);

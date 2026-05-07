@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Live session recorder: `bin/record.sh` (start/stop/toggle/status/gif), `/illo-record` slash command, and `r` key in TUI events focus to toggle asciinema recording with a `● REC` status-bar indicator; casts auto-convert to gif via `agg` on stop.
+
 ## [0.4.1] - 2026-05-07
 
 ### Fixed

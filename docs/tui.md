@@ -96,6 +96,7 @@ closes it.
 | `PgUp` / `PgDn` | Scroll five events |
 | `v` | Toggle filter: low-noise (default) ↔ verbose |
 | `x` | Clear resolved events from the log view |
+| `r` | Toggle session recording (asciinema → gif via `agg`). Recordings go to `~/.claude/illo-sidebar/recordings/`. `● REC` indicator appears in the status bar while active. |
 | `Enter` | Open event-detail popup (kind, urgency, snippet, transcript snapshot — wrapping, scrollable) |
 | `Esc` / `q` | Close event-detail popup |
 | `↑` / `↓` | Scroll popup content one line (while popup is open) |
