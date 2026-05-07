@@ -1,6 +1,6 @@
-# illo — v0.4 — deliberate-prompting workbench for Claude Code (and any HITL agent)
+# illo — v0.4.1 — deliberate-prompting workbench for Claude Code (and any HITL agent)
 
-![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.4.0-f7b955)
+![CI](https://github.com/laiadlotape/illo/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020.x-339933) ![Plugin](https://img.shields.io/badge/plugin-v0.4.1-f7b955)
 
 A Claude Code plugin (and standalone local daemon) whose default surface is a
 **prompt notepad** that lives in a tmux split next to the Claude pane. Compose
@@ -74,6 +74,8 @@ A browser fallback (`/illo-web`) is still available for headless / remote use.
 ---
 
 ## How it works
+
+![illo TUI v0.4.1 — compose, events log, help overlay](https://github.com/laiadlotape/illo/releases/download/v0.4.1/illo-tui-v041.gif)
 
 illo is built around the principle from [FindingMemo](https://github.com/lotape6/FindingMemo/blob/master/lessons/00-introduction/deck.md):
 
