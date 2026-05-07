@@ -2158,6 +2158,18 @@ async function main() {
   // Sync recording indicator with any in-progress recording started before TUI launched
   try { appState.recording = fs.existsSync(REC_STATE_FILE); } catch { /* non-fatal */ }
 
+  // Poll the state file every second so the ● REC indicator updates live
+  // when recording is toggled from outside (shell or /illo-record command).
+  setInterval(() => {
+    try {
+      const now = fs.existsSync(REC_STATE_FILE);
+      if (now !== appState.recording) {
+        appState.recording = now;
+        scheduleRender();
+      }
+    } catch { /* non-fatal */ }
+  }, 1000);
+
   // Connect WS
   connectWS(port);
 
