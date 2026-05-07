@@ -205,7 +205,7 @@ broadcast:
   `tmux list-panes` for the current window) and uses the first pane whose
   current command is `claude` or whose process tree contains `claude`.
 
-Set via `POST /config/pane-override` (typically from the `/sb-attach`
+Set via `POST /config/pane-override` (typically from the `/illo-attach`
 slash command). Cleared by passing `{"paneId": null}`.
 
 ### Re-warn cadence

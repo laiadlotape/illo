@@ -2,7 +2,7 @@
 description: Clear the illo TUI pane override; return to auto-detection of the claude pane.
 ---
 
-Clear any pane override previously set by `/sb-attach`. The illo TUI returns to scanning the current tmux window for a pane running `claude`.
+Clear any pane override previously set by `/illo-attach`. The illo TUI returns to scanning the current tmux window for a pane running `claude`.
 
 ```bash
 PORT=$(cat "$HOME/.claude/illo-sidebar/daemon.port" 2>/dev/null || echo 7821)

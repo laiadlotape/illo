@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open the sidebar UI in a browser window pinned to the right of the screen.
-# This is the explicit browser fallback for illo-sidebar (use /sb-web to invoke).
+# This is the explicit browser fallback for illo-sidebar (use /illo-web to invoke).
 # Tries chromium-family --app mode for a chromeless window, falls back to xdg-open.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-07
+
+### Changed (BREAKING)
+
+- **Plugin renamed**: `illo-sidebar` → `illo`. After update, the plugin namespace is `illo:<cmd>` (was `illo-sidebar:<cmd>`).
+- **Slash commands renamed**: `/sb*` → `/illo*` everywhere. The main TUI launcher is now `/illo` (was `/sb`).
+
+### Migration
+
+- Run `claude plugin update illo-sidebar@illo`. The local marketplace is unchanged; the plugin entry name updates from `illo-sidebar` to `illo`. After the next update cycle, install with `claude plugin install illo@illo`.
+- The daemon's state directory (`~/.claude/illo-sidebar/`) is NOT renamed — existing items, history, and config are preserved.
+
 ### Added
 
 - `/gif-record` skill: record the current tmux window to a gif with gentle keystroke overlay. Uses vhs (preferred) or asciinema+agg (fallback). Both are optional dependencies; install one-liners in `docs/gif-record.md`. Recordings go to `docs/recordings/` (gitignored). New: `bin/gif-record.sh`, `skills/gif-record/SKILL.md`, `commands/gif-record.md`, `docs/gif-record.md`, `tests/gif-record.test.sh` (#34).
@@ -180,7 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Click-to-resume: "resume here" button writes `pending_resume.json`; the
   `UserPromptSubmit` hook injects context into the next Claude turn.
 
-[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/laiadlotape/illo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/laiadlotape/illo/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/laiadlotape/illo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/laiadlotape/illo/releases/tag/v0.1.0

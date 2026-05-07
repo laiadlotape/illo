@@ -1,7 +1,7 @@
 {
-  "name": "illo-sidebar",
+  "name": "illo",
   "description": "CLI-native prompt notepad sidebar for Claude Code (and any HITL agent framework). Compose deliberately, send to the Claude pane via tmux without auto-pressing Enter.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": { "name": "illo" },
   "license": "MIT",
   "homepage": "https://github.com/lotape6/illo-sidebar",
@@ -22,13 +22,13 @@
       "type": "boolean",
       "title": "Auto-open sidebar on session start",
       "default": true,
-      "description": "Open the sidebar automatically on session start. With the TUI default, this only auto-spawns inside tmux or when ILLO_SIDEBAR_AUTO_TERMINAL is set; for the browser fallback, see /sb-web."
+      "description": "Open the sidebar automatically on session start. With the TUI default, this only auto-spawns inside tmux or when ILLO_SIDEBAR_AUTO_TERMINAL is set; for the browser fallback, see /illo-web."
     },
     "browserCommand": {
       "type": "string",
-      "title": "Browser command (for /sb-web)",
+      "title": "Browser command (for /illo-web)",
       "default": "",
-      "description": "Browser launcher used by /sb-web only (e.g. 'google-chrome', 'chromium', 'firefox'). Empty = autodetect."
+      "description": "Browser launcher used by /illo-web only (e.g. 'google-chrome', 'chromium', 'firefox'). Empty = autodetect."
     },
     "warnStyle": {
       "type": "string",
