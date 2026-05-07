@@ -681,11 +681,23 @@ function eventTitle(ev) {
   return ev.title || '';
 }
 
+// Export-friendly: referenced by tests/tui-units.test.mjs.
+// Returns true when an event/item should appear in low-noise mode.
+export function passesLowNoiseFilter(ev) {
+  const k = ev.kind;
+  if (k === 'ask_user') return true;
+  if (k === 'sent') return true;
+  if (k === 'notification') {
+    return ev.urgency === 'urgent' || ev.subkind === 'permission_prompt';
+  }
+  return false;
+}
+
 function visibleEvents() {
   const all = appState.events.slice();
   if (appState.view.eventFilter === 'verbose') return all;
-  // low-noise: ask_user, notification, sent
-  return all.filter((ev) => ['ask_user', 'notification', 'sent'].includes(ev.kind));
+  // low-noise: ask_user, sent, and urgent/permission-prompt notifications only
+  return all.filter(passesLowNoiseFilter);
 }
 
 function render() {

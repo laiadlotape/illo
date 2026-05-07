@@ -264,9 +264,19 @@ Editor exits non-zero leave the buffer untouched and toast a warning.
 
 ## Event log filters
 
-Default filter `low-noise` shows only `kind ∈ {ask_user, notification, sent}`.
+Default filter is `low-noise`. Only attention-worthy items surface:
+
+| Kind | Passes low-noise? |
+|---|---|
+| `ask_user` | Always |
+| `sent` | Always |
+| `notification` with `urgency: 'urgent'` | Yes |
+| `notification` with `subkind: 'permission_prompt'` | Yes (security gates always surface) |
+| `notification` with any other urgency (`low`, `normal`) | No — filtered out |
+| `stop`, `session_start`, `session_end`, `user_prompt`, `ask_user_answered`, `custom`, `idle` | No |
+
 Press `v` (in events focus) to flip to `verbose` (every kind, including
-`stop`, `session_*`, `custom`).
+`stop`, `session_*`, `custom`, and all notification urgencies).
 
 The `x` key clears resolved events from the log view (does not delete from
 the daemon — those still appear via `GET /state`).

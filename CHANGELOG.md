@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- TUI low-noise filter now drops non-urgent `notification` items. Only `ask_user`, `sent`, urgent notifications, and permission-prompt notifications surface in low-noise. Press `v` to flip to verbose for everything (#45).
+
 ## [0.4.0] - 2026-05-07
 
 ### Changed (BREAKING)

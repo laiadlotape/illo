@@ -172,6 +172,43 @@ else
   fail "Expected stop kind to be filtered out under low-noise, but appeared: $LAST_LINE"
 fi
 
+# ── low-noise notification filter (#45) ──────────────────────────────────────
+# Post a low-urgency notification (should be filtered) then an urgent one
+# (should pass). Assert only the urgent one appears in the filtered events list.
+curl -sS -m 2 -X POST -H 'Content-Type: application/json' \
+  -d '{"kind":"notification","agent_id":"test:1","session_id":"test-1","urgency":"low","message":"Build cache warmed"}' \
+  "http://127.0.0.1:${PORT}/event" >/dev/null
+
+curl -sS -m 2 -X POST -H 'Content-Type: application/json' \
+  -d '{"kind":"notification","agent_id":"test:1","session_id":"test-1","urgency":"urgent","message":"Disk usage above 90%"}' \
+  "http://127.0.0.1:${PORT}/event" >/dev/null
+
+sleep 0.6
+
+LAST_LINE=$(tail -1 "$TUI_OUT")
+
+# The urgent notification should be present in filtered events
+URGENT_IN_EVENTS=$(echo "$LAST_LINE" | grep -o '"urgency":"urgent"' | wc -l || true)
+URGENT_IN_EVENTS=${URGENT_IN_EVENTS:-0}
+if [[ "$URGENT_IN_EVENTS" -ge 1 ]]; then
+  pass "TUI low-noise filter includes urgent notification"
+else
+  fail "Expected urgent notification to appear under low-noise, but not found: $LAST_LINE"
+fi
+
+# The low-urgency notification message should NOT appear as a standalone filtered
+# event. We check by verifying its message string is absent from the events list
+# embedded in the snapshot. The snapshot's "events" array only contains items
+# that pass the filter; the raw "items" array (from the daemon /state) is not
+# emitted here. We look for the unique message text.
+LOW_MSG_IN_EVENTS=$(echo "$LAST_LINE" | grep -o 'Build cache warmed' | wc -l || true)
+LOW_MSG_IN_EVENTS=${LOW_MSG_IN_EVENTS:-0}
+if [[ "$LOW_MSG_IN_EVENTS" -eq 0 ]]; then
+  pass "TUI low-noise filter excludes low-urgency notification"
+else
+  fail "Expected low-urgency notification to be filtered out, but appeared: $LAST_LINE"
+fi
+
 # v0.3.1: --no-tty snapshot should include hintPrimary containing "Ctrl-S send".
 if grep -q '"hintPrimary"' "$TUI_OUT"; then
   pass "TUI --no-tty snapshot has hintPrimary field"

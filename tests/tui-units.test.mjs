@@ -11,7 +11,7 @@ const __dirname  = path.dirname(__filename);
 const TUI        = path.resolve(__dirname, '..', 'bin', 'illo-tui.js');
 
 // ─── Import helpers from illo-tui.js ─────────────────────────────────────────
-const { wrapLogicalLine } = await import(TUI);
+const { wrapLogicalLine, passesLowNoiseFilter } = await import(TUI);
 
 // ─── wrapLogicalLine tests (#37 word-aware wrap) ─────────────────────────────
 
@@ -124,4 +124,48 @@ test('illo-tui.js source: WORD_HARD_BREAK_RATIO constant is 0.8', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(TUI, 'utf8');
   assert.ok(src.includes('WORD_HARD_BREAK_RATIO = 0.8'), 'WORD_HARD_BREAK_RATIO constant missing');
+});
+
+// ─── passesLowNoiseFilter tests (#45 low-noise notification filter) ───────────
+
+test('passesLowNoiseFilter: ask_user always passes', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'ask_user', urgency: 'normal' }), true);
+  assert.equal(passesLowNoiseFilter({ kind: 'ask_user', urgency: 'low' }), true);
+});
+
+test('passesLowNoiseFilter: sent always passes', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'sent', urgency: 'low' }), true);
+  assert.equal(passesLowNoiseFilter({ kind: 'sent', urgency: 'normal' }), true);
+});
+
+test('passesLowNoiseFilter: notification with urgency:low does NOT pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'notification', urgency: 'low' }), false);
+});
+
+test('passesLowNoiseFilter: notification with urgency:normal does NOT pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'notification', urgency: 'normal' }), false);
+});
+
+test('passesLowNoiseFilter: notification with urgency:urgent DOES pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'notification', urgency: 'urgent' }), true);
+});
+
+test('passesLowNoiseFilter: notification with subkind:permission_prompt and urgency:normal DOES pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'notification', urgency: 'normal', subkind: 'permission_prompt' }), true);
+});
+
+test('passesLowNoiseFilter: stop kind does NOT pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'stop' }), false);
+});
+
+test('passesLowNoiseFilter: custom kind does NOT pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'custom', urgency: 'urgent' }), false);
+});
+
+test('passesLowNoiseFilter: session_start kind does NOT pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'session_start' }), false);
+});
+
+test('passesLowNoiseFilter: idle kind does NOT pass', () => {
+  assert.equal(passesLowNoiseFilter({ kind: 'idle' }), false);
 });
