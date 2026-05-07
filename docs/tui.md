@@ -68,7 +68,8 @@ closes it.
 | `Delete` | Delete char right (joins next line at end) |
 | `←` `→` `↑` `↓` | Move cursor (with line-wrap on horizontal motion) |
 | `Ctrl-←` / `Ctrl-→` | Jump cursor left / right by one word (`[A-Za-z0-9_]` boundary); wraps to prev/next line at line boundaries |
-| `Ctrl-↑` / `Ctrl-↓` | Paragraph motion: jump to previous / next blank line |
+| `Ctrl-↑` / `Ctrl-↓` | Focus toggle: move focus to events log / back to compose (works from any pane) |
+| `Ctrl-Shift-↑` / `Ctrl-Shift-↓` | Paragraph motion in compose: jump to previous / next blank line (`\x1b[1;6A` / `\x1b[1;6B`) |
 | `Home` / `End` | Beginning / end of line |
 | `PgUp` / `PgDn` | Scroll one screen |
 | `Ctrl-A` | Beginning of line (alias for `Home`) |
@@ -83,7 +84,6 @@ closes it.
 | `Ctrl-E` | Open `$EDITOR` (or `nano`) on the buffer |
 | `Ctrl-X` | Clear compose buffer |
 | `Ctrl-\` / `Alt-w` | Toggle line wrap on/off (preference persisted to `tui-prefs.json`) |
-| `Ctrl-Up` | **Paragraph motion** (in compose focus — see note below) |
 | `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit (also `Ctrl-C`) |
 
@@ -100,32 +100,18 @@ closes it.
 | `Esc` / `q` | Close event-detail popup |
 | `↑` / `↓` | Scroll popup content one line (while popup is open) |
 | `PgUp` / `PgDn` | Scroll popup content one screen (while popup is open) |
-| `Ctrl-Up` | Move focus to events log (no-op if already in events) |
-| `Ctrl-Down` | Move focus back to compose |
+| `Ctrl-Up` | Move focus to events log (always — works from compose too) |
+| `Ctrl-Down` | Move focus back to compose (always) |
 | `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit |
 
-### Ctrl-Up / Ctrl-Down conflict resolution
+### Focus toggle and paragraph motion
 
-`Ctrl-Up` and `Ctrl-Down` were originally the global focus-toggle keys
-(compose ↔ events). In v0.3.1+ they are **context-sensitive**:
-
-- **Focus is on events**: `Ctrl-Up` and `Ctrl-Down` continue to behave as
-  focus toggles (same as before — no change for users who stay in the events
-  pane).
-- **Focus is on compose**: `Ctrl-Up` and `Ctrl-Down` become **paragraph
-  motion** (jump to the previous / next blank line), which is far more useful
-  during text composition. To move focus from compose to events, press
-  `Ctrl-Up` — but since you are in compose focus it fires paragraph motion
-  first. Use the sequence: press `Ctrl-Up` repeatedly (moves through
-  paragraphs) or use the mouse / `Ctrl-Down` from events. For a direct
-  compose-to-events jump without paragraph side effects, the events header
-  row ("Ctrl-Up focus") documents the existing shortcut — it still works as
-  intended when you are already in the events view.
-
-In practice, most users move focus with `Ctrl-Up` from events or by clicking
-into the compose box, so the compose-pane paragraph motion is a net addition
-with no functional regression.
+`Ctrl-Up` and `Ctrl-Down` are universal focus-toggle keys: they always switch
+between the compose pane and the events log regardless of which pane is
+currently focused. Use `Ctrl-Shift-Up` / `Ctrl-Shift-Down` (xterm sequences
+`\x1b[1;6A` / `\x1b[1;6B`) for paragraph motion (jump to previous / next blank
+line) within the compose pane.
 
 ## Hint footer
 
@@ -158,11 +144,19 @@ at the box width or scroll horizontally.
 - **Status bar**: `wrap:on` / `wrap:off` is shown in the compose status line.
 
 When wrap is on:
-- Each logical line is rendered as one or more visual rows of `innerCols`
-  characters (`cols - 4`).
-- The cursor block (`█`) appears on the correct visual row; at the wrap point
-  it is placed on the *next* visual row at position 0 (not at position
-  `innerCols`).
+- Each logical line is split into visual rows using word-aware wrapping
+  (`wrapLogicalLine`). The break point is the last whitespace character within
+  `innerCols` columns (`cols - 4`), provided that backing up to that whitespace
+  does not leave a trailing gap wider than `(1 - WORD_HARD_BREAK_RATIO) *
+  innerCols` (default ratio `0.8`, so ≤ 20% trailing space is acceptable).
+  Very long tokens (URLs, identifiers) that exceed the ratio threshold are
+  hard-broken at the column limit instead.
+- The `WORD_HARD_BREAK_RATIO = 0.8` constant is defined near the top of
+  `bin/illo-tui.js` and controls how aggressively the wrapper prefers
+  whitespace breaks over hard breaks.
+- The cursor block (`█`) appears on the correct visual row; the render maps
+  each logical column to its visual (segment, offset) pair based on actual
+  word-aware break positions.
 - PgUp/PgDn move by logical rows (same as before) — visual screenfuls are
   not implemented for PgUp/PgDn to keep the implementation simple.
 - Vertical viewport scrolling adjusts so the cursor's visual row is always
@@ -180,6 +174,28 @@ action (Enter, Backspace beyond the current group, kill, paste from
 `$EDITOR`, etc.) opens a fresh group on the next edit. The undo stack is
 capped at 100 entries; older entries are dropped silently. Redo is cleared
 whenever a new edit happens after an undo.
+
+### Pasting
+
+The TUI enables **bracketed paste mode** (`\x1b[?2004h`) on startup and
+disables it on exit (`\x1b[?2004l`). Terminals that support bracketed paste
+(all modern ones do) wrap paste content in `\x1b[200~` … `\x1b[201~` markers,
+which lets the TUI distinguish paste from keystroke-by-keystroke input.
+
+Paste behaviour:
+
+- **ANSI escape stripping**: CSI sequences (`\x1b[…`) and OSC sequences
+  (`\x1b]…\x07` / `\x1b]…\x1b\\`) are removed before insertion.
+- **Newlines preserved**: `\n` splits the paste into multiple logical lines.
+  `\t` is preserved as-is.
+- **No auto-indent per line**: auto-indent only fires on user-pressed Enter,
+  not on paste. The current line's indent is not propagated across paste lines.
+- **Single undo group**: the entire paste is pushed as one undo snapshot. A
+  single `Ctrl-Z` removes the full paste.
+- **1 MB cap**: pastes exceeding `PASTE_MAX_BYTES = 1024 * 1024` bytes are
+  silently truncated at the UTF-8 boundary before insertion.
+- **Defensive**: terminals that do not support bracketed paste fall through to
+  the regular keystroke path — no regression.
 
 ## Pane discovery
 
