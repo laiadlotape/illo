@@ -17,59 +17,41 @@ A browser fallback (`/illo-web`) is still available for headless / remote use.
 
 ---
 
-## What's new in v0.4
+## Features
 
-- **Plugin renamed**: `illo-sidebar` → `illo`. Slash commands are now `/illo`, `/illo-web`, `/illo-attach`, `/illo-detach`, `/illo-status`, `/illo-resume`, `/illo-tui`. The plugin namespace is `illo:<cmd>`.
-- The daemon state directory (`~/.claude/illo-sidebar/`) is **not** renamed — existing history is preserved.
-
-## What's new in v0.3
-
-- **Prompt-notepad TUI** (default surface): events log on top (~1/3),
-  full-feature compose buffer below (~2/3) with an in-house editor (cursor
-  motion, undo/redo, word/line kills, auto-indent on Enter).
+- **Prompt notepad TUI** (default surface) — opens in a tmux split via `/illo`.
+  Events log on top (~1/3); full-feature compose buffer below (~2/3) with
+  cursor motion, undo/redo, word/line kills, auto-indent, and word-wrap.
 - **`Ctrl-S` sends to the claude pane** via `tmux send-keys -l` (literal
-  text, no auto-Enter — the human reads once more in the destination pane
-  and submits). `Ctrl-D` is "send + Enter" for when you've already
-  re-read.
+  text, no auto-Enter — read once more in the destination pane, then submit).
+  `Ctrl-D` is "send + Enter" when you've already re-read.
 - **`Ctrl-E` opens `$EDITOR`** for long compositions; the buffer round-trips
   through a tmp file.
 - **Auto-detection of the claude pane** in the current tmux window. Override
   with `/illo-attach <pane_id>`, clear with `/illo-detach`.
-- **`POST /sent` + `sent` kind** in the protocol: every send is recorded in
-  the event log so you can scroll back.
-- **`paneOverride` daemon config**: persisted, broadcast over WS, exposed in
-  `/state` and `/protocol`.
-
-## What's still here from v0.2
-
-- **CLI-native TUI sidebar** (default) — opens in a tmux split via `/illo`.
-  Browser UI moved to optional `/illo-web` fallback.
+- **Event log** — every send, question, and notification is logged with a
+  timestamp. `ask_user` events show a `Q:` prefix; notifications show their
+  message text. Low-noise filter (default) drops non-urgent notifications.
+  Press `v` to flip to verbose.
+- **`x` clears the event log** — POSTs to `/clear` server-side; a toast
+  confirms how many events were removed.
+- **`*unsaved` indicator** — shown in the prompt status line only when the
+  buffer has content that has not been sent.
+- **Session recording** — press `r` (in events focus) to toggle asciinema
+  recording of the full tmux window. Auto-converts to gif via `agg` on stop.
+  See [Session recording](#session-recording).
 - **Generic protocol** — `POST /event` accepts events from Claude Code,
   LangGraph, CrewAI, OpenAI Codex, Aider, Cursor, OpenAI Agents SDK, or any
-  custom script. The full v0.1 envelope is still accepted unchanged.
+  custom script.
 - **Urgency tiers** — `urgency: low | normal | urgent`. Re-warn cadence scales
-  with urgency (0.5× for urgent, 4× for low). Urgent items flash inline in the
-  TUI and also trigger browser desktop notifications (when using `/illo-web`).
-- **Snooze** — per-item snooze with presets (5 m / 15 m / 1 h / 4 h). Snoozed
-  items appear in a dedicated filter view and re-surface automatically.
-- **Quick reply** — type a reply directly in the sidebar; `Cmd/Ctrl+Enter` sends
-  it. The daemon writes `pending_resume.json` with `user_reply_text` so the
-  agent's hook can inject it into the next turn.
-- **Transcript snapshots** — attach the last N lines of the agent's transcript to
-  any event. A collapsible `<details>` expander in the sidebar shows the context.
-- **Stats page** — `/stats.html` shows total items, by-kind breakdown, by-agent
-  breakdown, median and p95 time-to-resolve, dismissal rate, and top recurring
-  titles. History stored in `node:sqlite` (Node 22+) or JSONL fallback.
-- **Mobile push** — opt-in ntfy.sh and Pushover integration. After
-  `afk_threshold_seconds` without focus, the daemon pushes a notification with a
-  single-use reply link. See `docs/push.md`.
-- **Demo mode** — `bin/illo-demo.sh` runs scripted scenarios against the live
-  daemon at any speed multiplier. Three scenarios ship: `typical`, `multi-agent`,
-  `chaotic`.
-- **VCR** — `bin/illo-vcr.sh` records and replays event streams for debugging
-  and reproducible demos.
-- **Python + TypeScript SDKs** — thin stdlib-only reference clients in `sdks/`.
-  No `pip install` needed; drop the file onto `PYTHONPATH`.
+  with urgency (0.5× for urgent, 4× for low).
+- **Transcript snapshots** — attach the last N lines of the agent's transcript
+  to any event. Viewable in the event-detail popup (`Enter` in events focus).
+- **Mobile push** — opt-in ntfy.sh and Pushover integration. See `docs/push.md`.
+- **Demo mode** — `bin/illo-demo.sh` runs scripted scenarios at any speed.
+- **VCR** — `bin/illo-vcr.sh` records and replays event streams.
+- **Python + TypeScript SDKs** — thin stdlib-only clients in `sdks/`.
+- **Browser fallback** — `/illo-web` for headless or remote use.
 
 ---
 
@@ -123,7 +105,7 @@ You compose in illo's editor (free editing, undo, $EDITOR escape)
                 │
                 │   you watch the timeline build up; pick the next prompt
                 v
-  back to compose (Ctrl-R re-loads the last sent prompt for refinement)
+  back to compose — write the next prompt deliberately
 ```
 
 ### Event capture (the v0.2 plumbing, unchanged)
@@ -145,11 +127,16 @@ Any agent framework
   illo TUI event log   ←   browser fallback /illo-web (optional)
 ```
 
-### Resume / quick-reply (still available, secondary to the editor)
+### Answering a question
 
-If a captured `ask_user` or `notification` arrived while you were doing something else, you can answer it from inside illo without composing a fresh prompt: select the event in the log, press `r` to inject a one-line reply via `/items/:id/reply`. The daemon writes `pending_resume_<sessionId>.json`; the next `UserPromptSubmit` hook in that Claude session injects the original question's context — you don't have to retype it.
+When Claude posts an `ask_user` event, it appears in the events log with a `Q:` prefix. To answer:
 
-This path is optimised for short corrective replies. The default workflow is **compose deliberately in the editor, send via Ctrl-S, watch the response land in the event log.**
+1. Read the question in the events log (`Enter` opens a detail popup with the full text and options).
+2. Switch to the prompt buffer (`Ctrl-Down`).
+3. Compose your reply in the prompt pane.
+4. `Ctrl-S` to send it into the claude pane, then press `Enter` in that pane.
+
+The `UserPromptSubmit` hook fires `bin/on-user-prompt.sh`, which injects the original question's context into the turn so Claude does not re-ask it.
 
 ---
 
@@ -240,6 +227,56 @@ curl -sX POST -H 'Content-Type: application/json' \
 
 ---
 
+## Session recording
+
+illo can record the entire tmux window — both the Claude pane and the illo
+sidebar — as an asciinema cast, then auto-convert it to a gif via `agg`.
+
+### What is captured
+
+`bin/record.sh` attaches asciinema to the current tmux session in **read-only
+mode** via an isolated socket. The recording captures every visible pane in
+the window without interfering with your session.
+
+### How to use
+
+**From the TUI** — press `r` while the events pane is focused. The status bar
+shows `● REC` (bold red) while recording is active. Press `r` again to stop and
+auto-convert.
+
+**Via slash command** — `/illo-record` starts a recording; `/illo-record stop`
+stops it.
+
+**From the shell directly:**
+
+```bash
+bash bin/record.sh start    # start
+bash bin/record.sh stop     # stop + auto-gif
+bash bin/record.sh status   # check if recording
+bash bin/record.sh gif <cast-file>   # convert an existing cast manually
+```
+
+### Output
+
+Recordings are saved to `~/.claude/illo-sidebar/recordings/`:
+
+- `session-YYYYMMDD-HHMMSS.cast` — asciinema terminal recording
+- `session-YYYYMMDD-HHMMSS.gif` — auto-generated on stop (if `agg` is installed)
+
+### Requirements
+
+`asciinema` and `agg` — both available via standard package managers:
+
+```bash
+pip install asciinema
+cargo install --git https://github.com/asciinema/agg
+```
+
+If `agg` is not installed, the cast is still saved; convert it later with
+`bash bin/record.sh gif <cast-file>`.
+
+---
+
 ## Slash commands
 
 | Command | What it does |
@@ -250,6 +287,7 @@ curl -sX POST -H 'Content-Type: application/json' \
 | `/illo-detach` | Clear the pane override and return to auto-detection. |
 | `/illo-web` | Opens the browser UI fallback (~420 px wide window). Use when you can't use tmux or prefer the GUI. The browser surface still uses the v0.2 list view; prompt-notepad parity is tracked separately. |
 | `/illo-resume [item_id]` | With no argument, lists all unresolved items. With an id, marks it as the resume target. |
+| `/illo-record [stop\|status]` | Start/stop live session recording (asciinema, auto-converts to gif). See also: `r` key in events pane. |
 | `/illo-status` | Prints daemon port, healthz response, total item count, and unresolved count. |
 
 Example `/illo-status` output:
@@ -301,126 +339,48 @@ Environment variable overrides (take precedence over the file):
 Opens in a tmux split via `/illo`. Renders with pure ANSI escape codes — zero
 npm deps.
 
-- **Selection model** — the `▶` marker tracks the focused item; navigate with
-  `j`/`k`.
-- **Urgency badge** — `[urgent]` / `[normal]` / `[low]` displayed per item.
-  Urgent items are red-tinted; low items are dimmed.
-- **Agent identity line** — `agent_kind · session_id.slice(0,8)`.
-- **Snooze badge** — `[snoozed Nm]` shown on snoozed items; opacity reduced.
-- **Transcript context** — press `c` to expand the snapshot; scroll with
-  `,` / `.`.
-- **Reply mode** — press `r`; the bottom bar becomes an inline text input
-  prefixed `reply: `. Press `Enter` to submit, `Esc` to cancel.
-- **Snooze picker** — press `s`; choose `[1] 5m  [2] 15m  [3] 1h  [4] 4h`.
-- **Filter overlay** — press `/`; then `(a)gent`, `(u)rgency`, `(k)ind`, or
-  `(c)lear`.
-- **Box mode** — press `b` to collapse to a one-line summary (`illo · N
-  pending [urgent×N …] ●`).
-- **Reconnect loop** — prints `[reconnecting…]` in the header and retries
-  every second if the daemon disconnects.
-- **Quit** — press `q` or `Ctrl-C`; restores the terminal cleanly (alt-screen
-  off + cursor restore).
+**Status bar** (top row):
 
-Urgency also affects re-warn cadence:
-
-- `low` → 4× the base interval
-- `normal` → 1× base interval
-- `urgent` → 0.5× base interval (re-warns twice as often)
-
-Snooze via HTTP (works for both TUI and browser fallback):
-
-```bash
-curl -sX POST -H 'Content-Type: application/json' \
-  -d '{"seconds": 900}' \
-  http://127.0.0.1:$PORT/items/$ITEM_ID/snooze
 ```
+illo · v0.4.1 · pane: claude(%4) · focus: compose/events · ● REC (when recording) · ●
+```
+
+The rightmost `●` is the daemon connection indicator (green = connected, red = reconnecting).
+
+**Events log** (~1/3 of rows):
+
+- Timestamped events in reverse-chronological order; scrollable with `j`/`k`.
+- `ask_user` events show a `Q:` prefix; `notification` events show their message text.
+- Low-noise filter (default) surfaces only `ask_user`, `sent`, and urgent notifications.
+  Press `v` to flip to verbose (all kinds).
+- `x` clears resolved events and POSTs to `/clear` server-side.
+- `r` toggles session recording; `● REC` appears in the status bar while active.
+- `Enter` opens an event-detail popup (full text, urgency, transcript snapshot).
+
+**Prompt buffer** (~2/3 of rows):
+
+- Multi-line editor with undo/redo, word-wrap, auto-indent on Enter.
+- Status line above the box: `prompt · lines: N · words: N · *unsaved (when dirty) · wrap:on/off`.
+- `*unsaved` appears only when the buffer has content that has not been sent.
+
+**Hint footer** (bottom two rows):
+
+- Primary: `Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-Z undo · ? help`.
+- Secondary: contextual keys for the current focus pane.
+
+**Reconnect loop** — if the daemon disconnects, `[reconnecting…]` appears in the status bar and the TUI retries every second with backoff.
 
 For the full keybinding reference see `docs/tui.md`.
 
 ### Browser fallback (`/illo-web`)
 
-If you prefer a GUI, can't use tmux, or want the `/stats.html` dashboard, run
-`/illo-web`. The browser window is ~420 px wide and uses the same daemon
-WebSocket feed.
+If you can't use tmux, are on a headless machine, or want the `/stats.html`
+dashboard, run `/illo-web`. A ~420 px wide browser window opens using the same
+daemon WebSocket feed. Items are shown in a scrollable list with urgency badges,
+transcript expanders, snooze controls, and a quick-reply textarea.
 
-#### Modes
-
-- **Full** (`data-mode="full"`): header bar + scrollable item list. Default.
-- **Compact box** (`data-mode="box"`): header and list hidden; a small pill
-  shows the count of unresolved items. Pulses continuously when items are
-  pending.
-
-Toggle with the **"box"/"list" button** or press **`b`** (window-local).
-
-#### Item card anatomy
-
-Each card shows:
-
-- Kind label (`ask user`, `notification`, `custom`, `idle`)
-- Urgency badge (`low`, `normal`, `urgent`)
-- Agent identity line (`agentKind · sessionId[:8]`) — hidden for generic items
-- Title and snippet
-- Elapsed time (live-updated every second)
-- Transcript snapshot expander (collapsible `<details>`) if `transcript_snapshot` was sent
-- Snooze badge (shows remaining time when snoozed)
-- Action row: `resume here`, `acknowledge`, `snooze ▾`, `×` dismiss
-- Quick reply textarea (hidden when `quick_reply_enabled: false`)
-
-#### Quick reply
-
-Items with `quick_reply_enabled: true` (the default) show a textarea at the
-bottom of the card. Type a reply and press `Cmd/Ctrl+Enter` (or click "send").
-The daemon:
-
-1. Writes `pending_resume.json` with `user_reply_text`.
-2. Marks the item `replied: true, resolved: true, focused: true`.
-3. Broadcasts `item:update`.
-
-The UI hides the textarea and shows a `[replied] <text>` pill. The
-`UserPromptSubmit` hook picks up the reply on the next prompt.
-
-Disable quick reply for an item by sending `"quick_reply_enabled": false` in
-the event envelope.
-
-#### Filter chips
-
-The filter row offers:
-
-- `all` / `pending` / `snoozed` — base visibility mode
-- `by urgency ▾` — dropdown to filter by `low`, `normal`, `urgent`, or `any`
-- `by kind ▾` — dropdown to filter by `ask_user`, `notification`, `custom`,
-  `idle`, or `any`
-- `by agent ▾` — dropdown populated dynamically from item `agentKind` values
-
-#### Transcript snapshot expander
-
-When an item has a `transcriptSnapshot`, a `<details class="transcript-expander">`
-element is visible below the snippet. Click the summary to expand; the raw text
-appears in a `<pre>`. This lets you see what the agent was doing at the moment
-it paused.
-
-#### Browser notifications
-
-Items with `urgency: urgent` trigger `new Notification(title, {...})` when the
-sidebar receives the `item:add` WebSocket message. The browser must have
-granted notification permission. The "notif: on/off" button in the header
-toggles the feature (persisted in `localStorage`). In headless CI environments
-(no browser permission), notifications are silently skipped.
-
-#### Stats page
-
-Click the `stats` link in the header (or navigate to `/stats.html`).
-
-Shows:
-
-- Summary cards: total items, median resolve time, p95 resolve time, dismissal
-  rate, window (default 7 days).
-- `by kind` bar chart.
-- `by agent kind` bar chart.
-- Top recurring titles (items with the same title appearing more than once).
-
-Data comes from the history sink (`node:sqlite` on Node 22+ or JSONL fallback).
-Pass `?days=N` to `/stats` to change the window.
+The TUI is the primary surface. The browser fallback is for situations where a
+terminal multiplexer is not available or the user prefers a GUI.
 
 ---
 

@@ -1,4 +1,4 @@
-# illo TUI — v0.3 prompt notepad
+# illo TUI — prompt notepad
 
 The illo sidebar is a **prompt notepad** that lives in a tmux split next to
 the Claude pane. You compose, edit, review, then hand the prompt off to the
@@ -57,7 +57,7 @@ node /path/to/illo/bin/illo-tui.js
 Press `?` at any time to open the full keybindings help overlay. `Esc` or `?`
 closes it.
 
-### Prompt pane (internally `appState.compose`) (focus: compose)
+### Prompt pane (focus: compose)
 
 | Key | Action |
 |---|---|
@@ -281,6 +281,34 @@ Press `v` (in events focus) to flip to `verbose` (every kind, including
 
 The `x` key clears resolved events from the log view and POSTs to `/clear` so
 the daemon removes them server-side. A toast shows how many were removed.
+
+## Session recording
+
+Press `r` (in events focus) to start or stop a live recording of the full tmux
+window — capturing both the Claude pane and the illo sidebar in one view.
+
+- **`r`** — toggle recording on/off. The status bar shows `● REC` (bold red) while active.
+- Recordings are saved to `~/.claude/illo-sidebar/recordings/session-YYYYMMDD-HHMMSS.cast`.
+- On stop, `agg` converts the cast to a `.gif` automatically (if installed).
+- To convert an existing cast manually: `bash bin/record.sh gif <cast-file>`.
+
+The recording uses **asciinema** attached read-only to the current tmux session
+via an isolated socket — it does not interfere with your session.
+
+**Requirements:** `asciinema` and `agg`. Install:
+
+```bash
+pip install asciinema
+cargo install --git https://github.com/asciinema/agg
+```
+
+You can also start/stop from outside the TUI:
+
+```bash
+bash bin/record.sh start   # start
+bash bin/record.sh stop    # stop + auto-gif
+bash bin/record.sh status  # check if recording
+```
 
 ## Troubleshooting
 
