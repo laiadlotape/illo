@@ -43,6 +43,10 @@ const PASTE_MAX_BYTES = 1024 * 1024;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
+const PLUGIN_VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).version; }
+  catch { return '?'; }
+})();
 const TMUX_SEND = path.join(PLUGIN_ROOT, 'bin', 'tmux-send.sh');
 const RECORD_SH = path.join(PLUGIN_ROOT, 'bin', 'record.sh');
 const REC_STATE_FILE = path.join(os.tmpdir(), 'illo-rec-state.txt');
@@ -769,7 +773,7 @@ function render() {
 
   out.push(moveTo(1, 1) + eraseLine());
   out.push(bold() + color(C.amber) + ' illo' + resetAttrs());
-  out.push(color(C.dim_c) + ' · v0.3' + resetAttrs());
+  out.push(color(C.dim_c) + ' · v' + PLUGIN_VERSION + resetAttrs());
   out.push(color(C.dim_c) + ' · ' + paneStr + resetAttrs());
   out.push(color(C.dim_c) + ' · ' + focusStr + resetAttrs());
   out.push(reconn);
