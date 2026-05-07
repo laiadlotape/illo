@@ -23,8 +23,9 @@ cmd_start() {
   SRC=$(tmux display-message -p '#{session_name}')
   W=$(tmux display-message -p '#{window_width}')
   H=$(tmux display-message -p '#{window_height}')
+  # asciinema 2.x uses -c for the command, not the `-- cmd` form
   tmux -L "$REC_SOCK" -f /dev/null new-session -d -s rec -x "$W" -y "$H" \
-    "asciinema rec --quiet '$CAST' -- tmux -S '$SOCK' attach -t '$SRC' -r"
+    "asciinema rec -q -c \"tmux -S '$SOCK' attach -t '$SRC' -r\" '$CAST'"
   echo "$REC_SOCK $CAST $SRC" > "$STATE_FILE"
   printf 'recording started\ncast: %s\n' "$CAST"
 }

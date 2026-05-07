@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-07
+
+### Fixed
+
+- `bin/record.sh`: use correct asciinema 2.x syntax (`-c COMMAND`) instead of the unsupported `-- command` form; recordings now produce a cast file and auto-convert to gif on stop.
+
 ## [0.4.2] - 2026-05-07
 
 ### Added
@@ -216,7 +222,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Click-to-resume: "resume here" button writes `pending_resume.json`; the
   `UserPromptSubmit` hook injects context into the next Claude turn.
 
-[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/laiadlotape/illo/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/laiadlotape/illo/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/laiadlotape/illo/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/laiadlotape/illo/compare/v0.3.0...v0.4.0
