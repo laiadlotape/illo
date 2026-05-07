@@ -1,3 +1,9 @@
+# Recorded TUI demos (large binary blobs; recordings live in docs/recordings/)
+docs/recordings/*.gif
+docs/recordings/*.webm
+docs/recordings/*.mp4
+docs/recordings/*.cast
+
 # Test output
 tests/node_modules/
 tests/playwright-report/

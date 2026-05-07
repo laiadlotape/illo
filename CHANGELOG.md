@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `/gif-record` skill: record the current tmux window to a gif with gentle keystroke overlay. Uses vhs (preferred) or asciinema+agg (fallback). Both are optional dependencies; install one-liners in `docs/gif-record.md`. Recordings go to `docs/recordings/` (gitignored). New: `bin/gif-record.sh`, `skills/gif-record/SKILL.md`, `commands/gif-record.md`, `docs/gif-record.md`, `tests/gif-record.test.sh` (#34).
 - TUI compose: bracketed paste support. Multi-line pastes arrive as a single undo group with newlines preserved and ANSI escapes stripped; auto-indent is suppressed for paste content. Cap: 1 MB per paste (#39).
 
 ### Changed
