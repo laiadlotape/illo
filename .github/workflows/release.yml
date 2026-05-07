@@ -28,6 +28,6 @@ jobs:
           BODY="$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)"
           printf 'body<<EOF\n%s\nEOF\n' "$BODY" >> "$GITHUB_OUTPUT"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           body: ${{ steps.changelog.outputs.body }}
