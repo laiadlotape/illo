@@ -29,7 +29,15 @@ vcr/
 .idea/
 
 # Claude Code per-project state (session, transcripts, etc.)
-.claude/
+# Ignore everything under .claude/ EXCEPT the agentic harness (tracked
+# skills + agent role briefs). Note: gitignore re-includes don't work if a
+# parent directory is fully excluded, so we exclude .claude/* (one level)
+# and re-include the two harness directories explicitly.
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+!.claude/agents/
+!.claude/agents/**
 
 # Python
 __pycache__/

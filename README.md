@@ -511,6 +511,59 @@ so replayed items are distinguishable in `/state`.
 
 ---
 
+## Wave orchestration
+
+`wave` is an opt-in, self-managing GitHub orchestration loop for the
+`laiadlotape/illo` repo itself. The user (or an Opus 4.7 orchestrator session)
+calls `/wave` once; a CronCreate fires `/wave-tick` every 5 minutes; each tick
+dispatches at most one Sonnet sub-agent against a `status:ready` issue or a
+PR awaiting review. The loop self-disables when the queue is empty.
+
+It is gated by a label state machine — `status:*`, `agent:*`, `priority:*`,
+`complexity:high`, `safe:auto-merge`, `claimed-by-*`, `wave:focus` — and
+hard resource brakes (load, disk, swap). PRs auto-merge only when CI is
+green AND the reviewer agent approves AND the PR carries `safe:auto-merge`;
+otherwise the reviewer escalates with `status:human-needed` and a TUI
+notification.
+
+### Slash commands
+
+- `/wave` — bootstrap the loop. Creates labels, surveys the queue, schedules
+  the cron. Idempotent.
+- `/wave-tick` — fired by cron; can also be invoked manually.
+- `/wave-stop` — cancel the cron.
+- `/wave-focus <#>` — pin one issue or PR to the front of the queue.
+- `/wave-focus clear` — unpin everything.
+- `/wave-status` — quick survey + in-flight detail.
+
+### Agent roles
+
+Six roles live in `.claude/agents/<role>.md`, each with a narrow scope:
+
+| Role        | Scope                                                           |
+|-------------|-----------------------------------------------------------------|
+| tui-dev     | `bin/illo-tui.js` + TUI tests + TUI doc                         |
+| daemon-dev  | `daemon/server.js` + protocol doc + daemon tests                |
+| doc-writer  | `README.md` + `docs/` + `CHANGELOG.md`                          |
+| test-fixer  | `tests/`                                                        |
+| hooks-dev   | `bin/on-*.sh` + `bin/_lib.sh` + tmux helpers + `hooks/`         |
+| reviewer    | PR review only (synthesised by `/wave-tick`; no code edits)     |
+
+### Tooling
+
+| Script                          | Purpose                                                |
+|---------------------------------|--------------------------------------------------------|
+| `bin/wave-init-labels.sh`       | Idempotent label creation via `gh label create --force`|
+| `bin/wave-survey.sh`            | One-line summary of queue counts                       |
+| `bin/wave-resource-check.sh`    | Load / disk / swap brake check                         |
+| `bin/wave-find-next.sh`         | Picker (focus → FIFO → no-orphan filter)               |
+| `bin/wave-orphan-check.sh`      | No-orphan enforcer                                     |
+
+All zero-dep bash. See `docs/wave.md` for the full guide and `docs/agents.md`
+for the role index.
+
+---
+
 ## SDKs
 
 See `sdks/README.md` for full API reference. Both SDKs are single-file, no
