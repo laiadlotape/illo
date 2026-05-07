@@ -681,6 +681,52 @@ function eventTitle(ev) {
   return ev.title || '';
 }
 
+// formatEventBody — pretty-prints an event into a human-readable multi-line string.
+// Export-friendly: referenced by tests/tui-units.test.mjs.
+export function formatEventBody(ev) {
+  switch (ev.kind) {
+    case 'ask_user': {
+      const ti = ev.payload?.tool_input || ev.payload || {};
+      const qs = Array.isArray(ti.questions) ? ti.questions : [];
+      if (qs.length === 0) return ev.title || '(no question)';
+      const q = qs[0];
+      const lines = ['Q: ' + (q.question || '(unnamed)')];
+      if (Array.isArray(q.options)) {
+        q.options.forEach((o, i) => lines.push(`   [${i + 1}] ${o.label || o}`));
+      }
+      if (qs.length > 1) lines.push(`   (+${qs.length - 1} more question${qs.length > 2 ? 's' : ''})`);
+      return lines.join('\n');
+    }
+    case 'notification': {
+      return ev.payload?.message || ev.title || '(no message)';
+    }
+    case 'sent': {
+      const text = ev.payload?.text || ev.title || '';
+      return text.length > 80 ? text.slice(0, 80) + '…' : text;
+    }
+    case 'custom': {
+      const lines = [ev.title || '(custom event)'];
+      if (ev.snippet) lines.push(ev.snippet);
+      if (ev.payload && typeof ev.payload === 'object') {
+        for (const [k, v] of Object.entries(ev.payload)) {
+          if (k === 'message') continue;
+          if (typeof v === 'string' || typeof v === 'number') {
+            lines.push(`  ${k}: ${v}`);
+          }
+        }
+      }
+      return lines.join('\n');
+    }
+    case 'stop':
+    case 'session_start':
+    case 'session_end':
+    case 'user_prompt':
+      return ev.title || ev.kind;
+    default:
+      return ev.title || ev.kind || '';
+  }
+}
+
 // Export-friendly: referenced by tests/tui-units.test.mjs.
 // Returns true when an event/item should appear in low-noise mode.
 export function passesLowNoiseFilter(ev) {
@@ -799,7 +845,7 @@ function render() {
     const time = fmtHHMM(ev.createdAt || Date.now());
     const kindStr = pad(ev.kind, 9);
     const titleAvail = Math.max(8, cols - 2 - 5 - 1 - 9 - 3 - 4);
-    const titleText = truncate(eventTitle(ev), titleAvail);
+    const titleText = truncate(formatEventBody(ev).split('\n')[0], titleAvail);
     const isSelected = appState.view.focus === 'events' && (startIdx + r === evs.length - 1 - scroll);
     if (isSelected) out.push(reverse());
     out.push(color(C.dim_c) + ' ' + time + ' · ' + resetAttrs());
@@ -816,9 +862,10 @@ function render() {
   out.push(moveTo(composeStatusRow, 1) + eraseLine());
   const lineCount = appState.compose.lines.length;
   const wordCount = composeWordCount();
-  const dirtyTag = appState.compose.dirty ? ' · *unsaved' : '';
+  const hasContent = appState.compose.lines.join('').trim().length > 0;
+  const dirtyTag = (appState.compose.dirty && hasContent) ? ' · *unsaved' : '';
   const wrapTag = appState.compose.wrap ? ' · wrap:on' : ' · wrap:off';
-  const composeFocusTag = appState.view.focus === 'compose' ? bold() + color(C.amber) + 'compose' + resetAttrs() : color(C.dim_c) + 'compose' + resetAttrs();
+  const composeFocusTag = appState.view.focus === 'compose' ? bold() + color(C.amber) + 'prompt' + resetAttrs() : color(C.dim_c) + 'prompt' + resetAttrs();
   out.push(' ' + composeFocusTag + color(C.dim_c)
     + ` · lines: ${lineCount} · words: ${wordCount}${dirtyTag}${wrapTag}` + resetAttrs());
 
@@ -996,7 +1043,7 @@ function render() {
   if (appState.view.focus === 'compose') {
     secondaryHint = 'Ctrl-W word-back · Ctrl-U line-back · Ctrl-K kill-EOL · Ctrl-←/→ word · Ctrl-Shift-↑/↓ paragraph · Ctrl-\\ wrap · q quit';
   } else {
-    secondaryHint = 'j/k scroll · v filter · x clear · Enter detail · Ctrl-Down compose · q quit';
+    secondaryHint = 'j/k scroll · v filter · x clear · Enter detail · Ctrl-Down prompt · q quit';
   }
   out.push(' ' + color(C.hint) + truncate(secondaryHint, cols - 2) + resetAttrs());
 
@@ -1055,11 +1102,11 @@ function renderModal(out, rows, cols) {
 
 function renderHelp(out, rows, cols) {
   const helpLines = [
-    '── Compose pane ──────────────────────────────────────',
+    '── Prompt pane ───────────────────────────────────────',
     'Ctrl-S          Send to claude pane (no auto-Enter)',
     'Ctrl-D          Send + press Enter',
     'Ctrl-E          Open $EDITOR on buffer',
-    'Ctrl-X          Clear compose buffer',
+    'Ctrl-X          Clear prompt buffer',
     'Ctrl-Z          Undo',
     'Ctrl-Y          Redo',
     'Ctrl-L          Force-redraw',
@@ -1140,6 +1187,15 @@ function renderEventDetail(out, rows, cols) {
   allLines.push('');
   allLines.push(`urgency: ${ev.urgency || 'normal'}`);
   if (ev.sessionId) allLines.push(`session: ${ev.sessionId}`);
+  // Pretty-printed body
+  const formattedBody = formatEventBody(ev);
+  if (formattedBody) {
+    allLines.push('');
+    allLines.push('— detail —');
+    for (const ln of formattedBody.split('\n')) {
+      allLines.push(...wrapText(ln, popupContentWidth));
+    }
+  }
   // Snippet
   if (ev.snippet) {
     allLines.push('');
@@ -1262,6 +1318,7 @@ function renderNoTty() {
     hintPrimary: 'Ctrl-S send · Ctrl-D send+Enter · Ctrl-E $EDITOR · Ctrl-Z undo · ? help',
     events: evs.slice(-10).map((ev) => ({
       id: ev.id, kind: ev.kind, urgency: ev.urgency, title: eventTitle(ev),
+      formattedLine: formatEventBody(ev).split('\n')[0],
     })),
   };
   process.stdout.write(JSON.stringify(snap) + '\n');
@@ -1348,6 +1405,7 @@ async function sendToPane(port, opts = { autoEnter: false }) {
   }
   // Clear compose buffer.
   clearCompose();
+  appState.compose.dirty = false;
   if (opts.autoEnter) {
     showToast('sent + Enter → claude pane');
   } else {
@@ -1393,7 +1451,7 @@ function externalEditor() {
     appState.compose.cur.col = (appState.compose.lines[appState.compose.cur.row] || '').length;
     appState.compose.visibleRowOffset = 0;
     appState.compose.colOffset = 0;
-    markDirty();
+    appState.compose.dirty = false;
     endUndoGroup();
     showToast('loaded ' + appState.compose.lines.length + ' line(s) from $EDITOR');
   } else {
@@ -1770,6 +1828,14 @@ function handleKey(key, port) {
       allLines.push('');
       allLines.push(`urgency: ${ev.urgency || 'normal'}`);
       if (ev.sessionId) allLines.push(`session: ${ev.sessionId}`);
+      const formattedBody2 = formatEventBody(ev);
+      if (formattedBody2) {
+        allLines.push('');
+        allLines.push('— detail —');
+        for (const ln of formattedBody2.split('\n')) {
+          allLines.push(...wrapText(ln, popupContentWidth));
+        }
+      }
       if (ev.snippet) {
         allLines.push('');
         allLines.push('— snippet —');
@@ -1880,12 +1946,22 @@ function handleEventsKey(key, port) {
       v.eventScroll = 0;
       showToast(`event filter: ${v.eventFilter}`);
       break;
-    case 'x':
-      // Clear the in-memory event log view (does not delete from daemon)
-      appState.events = appState.events.filter((ev) => !ev.resolved);
-      v.eventScroll = 0;
-      showToast('cleared resolved events from log view');
+    case 'x': {
+      // Count resolved events before removing them
+      const resolved = appState.events.filter((ev) => ev.resolved === true);
+      const n = resolved.length;
+      if (n === 0) {
+        showToast('nothing to clear');
+      } else {
+        // POST to /clear so daemon removes resolved items server-side
+        httpPost(port, '/clear', {}).catch(() => {});
+        // Update local state immediately
+        appState.events = appState.events.filter((ev) => ev.resolved !== true);
+        v.eventScroll = 0;
+        showToast(`cleared ${n} resolved event${n === 1 ? '' : 's'}`);
+      }
       break;
+    }
     case 'enter': {
       // Open event-detail popup for currently focused event
       const idx = evs.length - 1 - v.eventScroll;
@@ -1917,7 +1993,8 @@ function handleComposeKey(key, port) {
         showToast('(buffer already empty)');
       } else {
         clearCompose();
-        showToast('compose cleared');
+        appState.compose.dirty = false;
+        showToast('prompt cleared');
       }
       scheduleRender();
       return;
