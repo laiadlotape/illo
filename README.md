@@ -75,7 +75,7 @@ A browser fallback (`/illo-web`) is still available for headless / remote use.
 
 ## How it works
 
-![illo TUI v0.4.1 — compose, events log, help overlay](https://github.com/laiadlotape/illo/releases/download/v0.4.1/illo-tui-v041.gif)
+![illo TUI — events log, compose, send, event-detail popup](https://github.com/laiadlotape/illo/releases/download/v0.4.1/illo-tui-latest.gif)
 
 illo is built around the principle from [FindingMemo](https://github.com/lotape6/FindingMemo/blob/master/lessons/00-introduction/deck.md):
 
