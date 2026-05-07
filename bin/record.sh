@@ -29,8 +29,16 @@ cmd_start() {
 cmd_stop() {
   [[ -f "$STATE_FILE" ]] || { echo "not recording"; exit 0; }
   read -r SOCK CAST < "$STATE_FILE"
+  # Detach the recording client gently — this lets asciinema's child process
+  # (tmux attach -r) exit cleanly and asciinema flush the cast to disk.
+  tmux -L "$SOCK" -f /dev/null detach-client -s rec 2>/dev/null || true
+  sleep 1   # wait for asciinema to finalise the cast file
   tmux -L "$SOCK" -f /dev/null kill-server 2>/dev/null || true
   rm -f "$STATE_FILE"
+  if [[ ! -f "$CAST" ]]; then
+    printf 'recording stopped (cast file not found — may not have saved)\n'
+    exit 1
+  fi
   printf 'recording stopped\ncast: %s\n' "$CAST"
   if command -v agg &>/dev/null; then
     GIF="${CAST%.cast}.gif"
