@@ -90,7 +90,7 @@ Two tmux panes side by side: the Claude session on the left, illo on the right. 
 │  > _ (cursor here after     │   12:31 · sent     · "Drop it. Backup" │   notifications /
 │      illo sends)            │   12:33 · stop     · waiting…          │   sent prompts)
 │                             ├────────────────────────────────────────┤
-│                             │ ┌─ compose ──── lines: 4 · words: 23 ─┐│  multi-line editor
+│                             │ ┌─ prompt ───── lines: 4 · words: 23 ─┐│  multi-line editor
 │                             │ │ Claude, after looking at the script,│ │  arrows / Home / End
 │                             │ │   1. Verify backup at /backups/…    │ │  Backspace / Ctrl-W
 │                             │ │   2. Run rollback if mismatch█      │ │  Ctrl-Z undo (2s groups)

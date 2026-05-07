@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - TUI low-noise filter now drops non-urgent `notification` items. Only `ask_user`, `sent`, urgent notifications, and permission-prompt notifications surface in low-noise. Press `v` to flip to verbose for everything (#45).
+- TUI events: `x` (clear) now correctly removes resolved events both locally and server-side via `POST /clear`, with a count toast (#47).
+- TUI compose: `*unsaved` indicator is no longer shown for empty buffers; only when the buffer has content AND has been edited since the last send/clear (#47).
+
+### Changed
+
+- TUI: compose pane is now labelled "prompt" everywhere user-facing (status line, box title, help overlay, hint footer, README + docs). Internal state names unchanged (#47).
+- TUI events: payloads are pretty-printed instead of dumped as JSON. `ask_user` shows `Q: <question>` + numbered options; `notification` shows just the message; `sent` shows a truncated excerpt; `custom` shows `field: value` lines (#47).
 
 ## [0.4.0] - 2026-05-07
 

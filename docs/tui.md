@@ -20,9 +20,9 @@ the human reads once more in the destination pane and submits.
 │   12:31 · sent      · "Drop it. Backup verified at /backups…│
 │   12:33 · stop      · waiting…                              │
 ├─────────────────────────────────────────────────────────────┤
-│ compose · lines: 4 · words: 23 · *unsaved · wrap:on         │  compose status
+│ prompt · lines: 4 · words: 23 · *unsaved · wrap:on          │  prompt status
 │ ┌─────────────────────────────────────────────────────────┐ │
-│ │ Claude, after looking at the migration script,          │ │  compose pane
+│ │ Claude, after looking at the migration script,          │ │  prompt pane
 │ │   1. Verify backup at /backups/users-2026-05-06         │ │  (~2/3)
 │ │   2. Run rollback if any row count differs█             │ │
 │ └─────────────────────────────────────────────────────────┘ │
@@ -31,9 +31,9 @@ the human reads once more in the destination pane and submits.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The events log takes ~1/3 of the available rows; compose takes ~2/3. On
-narrow terminals (< 24 rows), the events log shrinks to 4 rows so compose
-keeps the room. The two-row hint footer is always visible at the bottom.
+The events log takes ~1/3 of the available rows; the prompt pane takes ~2/3. On
+narrow terminals (< 24 rows), the events log shrinks to 4 rows so the prompt
+pane keeps the room. The two-row hint footer is always visible at the bottom.
 
 ## Quick start
 
@@ -57,7 +57,7 @@ node /path/to/illo/bin/illo-tui.js
 Press `?` at any time to open the full keybindings help overlay. `Esc` or `?`
 closes it.
 
-### Compose pane (focus: compose)
+### Prompt pane (internally `appState.compose`) (focus: compose)
 
 | Key | Action |
 |---|---|
@@ -69,7 +69,7 @@ closes it.
 | `←` `→` `↑` `↓` | Move cursor (with line-wrap on horizontal motion) |
 | `Ctrl-←` / `Ctrl-→` | Jump cursor left / right by one word (`[A-Za-z0-9_]` boundary); wraps to prev/next line at line boundaries |
 | `Ctrl-↑` / `Ctrl-↓` | Focus toggle: move focus to events log / back to compose (works from any pane) |
-| `Ctrl-Shift-↑` / `Ctrl-Shift-↓` | Paragraph motion in compose: jump to previous / next blank line (`\x1b[1;6A` / `\x1b[1;6B`) |
+| `Ctrl-Shift-↑` / `Ctrl-Shift-↓` | Paragraph motion in prompt pane: jump to previous / next blank line (`\x1b[1;6A` / `\x1b[1;6B`) |
 | `Home` / `End` | Beginning / end of line |
 | `PgUp` / `PgDn` | Scroll one screen |
 | `Ctrl-A` | Beginning of line (alias for `Home`) |
@@ -82,7 +82,7 @@ closes it.
 | `Ctrl-S` | **Send to claude pane** (no auto-Enter — review and submit yourself) |
 | `Ctrl-D` | Send + press Enter (skip the human review step) |
 | `Ctrl-E` | Open `$EDITOR` (or `nano`) on the buffer |
-| `Ctrl-X` | Clear compose buffer |
+| `Ctrl-X` | Clear prompt buffer |
 | `Ctrl-\` / `Alt-w` | Toggle line wrap on/off (preference persisted to `tui-prefs.json`) |
 | `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit (also `Ctrl-C`) |
@@ -101,17 +101,17 @@ closes it.
 | `↑` / `↓` | Scroll popup content one line (while popup is open) |
 | `PgUp` / `PgDn` | Scroll popup content one screen (while popup is open) |
 | `Ctrl-Up` | Move focus to events log (always — works from compose too) |
-| `Ctrl-Down` | Move focus back to compose (always) |
+| `Ctrl-Down` | Move focus back to prompt pane (always) |
 | `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit |
 
 ### Focus toggle and paragraph motion
 
 `Ctrl-Up` and `Ctrl-Down` are universal focus-toggle keys: they always switch
-between the compose pane and the events log regardless of which pane is
+between the prompt pane and the events log regardless of which pane is
 currently focused. Use `Ctrl-Shift-Up` / `Ctrl-Shift-Down` (xterm sequences
 `\x1b[1;6A` / `\x1b[1;6B`) for paragraph motion (jump to previous / next blank
-line) within the compose pane.
+line) within the prompt pane.
 
 ## Hint footer
 
@@ -121,7 +121,7 @@ The bottom two rows of the screen are always occupied by a hint footer:
   descriptions in `color(245)`. No `dim()` attribute — readable on both dark
   and light backgrounds. Content: `Ctrl-S send · Ctrl-D send+Enter · Ctrl-E
   $EDITOR · Ctrl-Z undo · ? help`.
-- **Row N (secondary)**: Contextual for the current focus pane. In compose
+- **Row N (secondary)**: Contextual for the current focus pane. In prompt
   focus: movement, kill, wrap, and quit keys. In events focus: scroll,
   filter, and detail keys. `color(245)` throughout.
 
@@ -141,7 +141,7 @@ at the box width or scroll horizontally.
   `~/.claude/illo-sidebar/tui-prefs.json` (`{ "composeWrap": true|false }`)
   directly from the TUI. No daemon round-trip is needed because wrap is a
   purely local display preference.
-- **Status bar**: `wrap:on` / `wrap:off` is shown in the compose status line.
+- **Status bar**: `wrap:on` / `wrap:off` is shown in the prompt status line.
 
 When wrap is on:
 - Each logical line is split into visual rows using word-aware wrapping
@@ -163,8 +163,8 @@ When wrap is on:
   on screen.
 
 When wrap is off (original behaviour): the horizontal `colOffset` is used
-exactly as before — the line scrolls right as the cursor moves past the box
-edge.
+exactly as before — the line scrolls right as the cursor moves past the prompt
+pane edge.
 
 ### Undo behavior
 
@@ -278,8 +278,8 @@ Default filter is `low-noise`. Only attention-worthy items surface:
 Press `v` (in events focus) to flip to `verbose` (every kind, including
 `stop`, `session_*`, `custom`, and all notification urgencies).
 
-The `x` key clears resolved events from the log view (does not delete from
-the daemon — those still appear via `GET /state`).
+The `x` key clears resolved events from the log view and POSTs to `/clear` so
+the daemon removes them server-side. A toast shows how many were removed.
 
 ## Troubleshooting
 

@@ -11,7 +11,7 @@ const __dirname  = path.dirname(__filename);
 const TUI        = path.resolve(__dirname, '..', 'bin', 'illo-tui.js');
 
 // ─── Import helpers from illo-tui.js ─────────────────────────────────────────
-const { wrapLogicalLine, passesLowNoiseFilter } = await import(TUI);
+const { wrapLogicalLine, passesLowNoiseFilter, formatEventBody } = await import(TUI);
 
 // ─── wrapLogicalLine tests (#37 word-aware wrap) ─────────────────────────────
 
@@ -168,4 +168,126 @@ test('passesLowNoiseFilter: session_start kind does NOT pass', () => {
 
 test('passesLowNoiseFilter: idle kind does NOT pass', () => {
   assert.equal(passesLowNoiseFilter({ kind: 'idle' }), false);
+});
+
+// ─── formatEventBody tests (#47 pretty-print event payloads) ─────────────────
+
+test('formatEventBody: ask_user with one question + options renders Q: + numbered options', () => {
+  const ev = {
+    kind: 'ask_user',
+    payload: {
+      tool_input: {
+        questions: [
+          { question: 'Deploy to production?', options: [{ label: 'Yes' }, { label: 'No' }] },
+        ],
+      },
+    },
+  };
+  const result = formatEventBody(ev);
+  assert.ok(result.startsWith('Q: Deploy to production?'), `unexpected start: ${result}`);
+  assert.ok(result.includes('   [1] Yes'), `missing option 1: ${result}`);
+  assert.ok(result.includes('   [2] No'), `missing option 2: ${result}`);
+});
+
+test('formatEventBody: ask_user multiple questions shows +N more', () => {
+  const ev = {
+    kind: 'ask_user',
+    payload: {
+      tool_input: {
+        questions: [
+          { question: 'Q1?', options: [] },
+          { question: 'Q2?', options: [] },
+          { question: 'Q3?', options: [] },
+        ],
+      },
+    },
+  };
+  const result = formatEventBody(ev);
+  assert.ok(result.includes('(+2 more questions)'), `missing plural: ${result}`);
+});
+
+test('formatEventBody: notification returns just the message text, not JSON', () => {
+  const ev = {
+    kind: 'notification',
+    payload: { message: 'npm install completed successfully' },
+    title: 'some title',
+  };
+  const result = formatEventBody(ev);
+  assert.equal(result, 'npm install completed successfully');
+  assert.ok(!result.includes('"kind"'), `should not contain JSON keys: ${result}`);
+});
+
+test('formatEventBody: sent truncates at 80 chars with ellipsis', () => {
+  const longText = 'a'.repeat(100);
+  const ev = {
+    kind: 'sent',
+    payload: { text: longText },
+  };
+  const result = formatEventBody(ev);
+  assert.ok(result.endsWith('…'), `should end with ellipsis: ${result}`);
+  assert.ok(result.length <= 82, `should be <= 82 chars (80 + ellipsis): ${result.length}`);
+});
+
+test('formatEventBody: sent short text is returned as-is', () => {
+  const ev = {
+    kind: 'sent',
+    payload: { text: 'short text' },
+  };
+  const result = formatEventBody(ev);
+  assert.equal(result, 'short text');
+});
+
+test('formatEventBody: custom with structured payload renders field: value lines', () => {
+  const ev = {
+    kind: 'custom',
+    title: 'Graph step complete',
+    payload: { step: 3, total: 5 },
+  };
+  const result = formatEventBody(ev);
+  assert.ok(result.startsWith('Graph step complete'), `unexpected start: ${result}`);
+  assert.ok(result.includes('  step: 3'), `missing step field: ${result}`);
+  assert.ok(result.includes('  total: 5'), `missing total field: ${result}`);
+});
+
+test('formatEventBody: custom omits message field from payload (already shown above)', () => {
+  const ev = {
+    kind: 'custom',
+    title: 'Custom event',
+    payload: { message: 'hidden', value: 42 },
+  };
+  const result = formatEventBody(ev);
+  assert.ok(!result.includes('  message:'), `message field should be omitted: ${result}`);
+  assert.ok(result.includes('  value: 42'), `value field should be present: ${result}`);
+});
+
+test('formatEventBody: ask_user with empty questions falls back gracefully', () => {
+  const ev = {
+    kind: 'ask_user',
+    title: 'fallback title',
+    payload: { tool_input: { questions: [] } },
+  };
+  const result = formatEventBody(ev);
+  assert.equal(result, 'fallback title');
+});
+
+test('formatEventBody: ask_user with no payload falls back gracefully', () => {
+  const ev = { kind: 'ask_user', title: 'no payload' };
+  const result = formatEventBody(ev);
+  assert.equal(result, 'no payload');
+});
+
+test('formatEventBody: notification with no message falls back to title', () => {
+  const ev = { kind: 'notification', title: 'title fallback', payload: {} };
+  const result = formatEventBody(ev);
+  assert.equal(result, 'title fallback');
+});
+
+test('formatEventBody: stop kind returns title or kind', () => {
+  assert.equal(formatEventBody({ kind: 'stop', title: 'waiting…' }), 'waiting…');
+  assert.equal(formatEventBody({ kind: 'stop' }), 'stop');
+});
+
+test('formatEventBody: unknown kind returns title or kind', () => {
+  assert.equal(formatEventBody({ kind: 'idle', title: 'idle state' }), 'idle state');
+  assert.equal(formatEventBody({ kind: 'idle' }), 'idle');
 });

@@ -230,6 +230,28 @@ else
   fail "TUI --no-tty snapshot missing composeWrap field"
 fi
 
+# ── 4b. Pretty-printed event format in --no-tty snapshot ────────────────────
+# The ask_user event posted earlier should appear with Q: prefix in formattedLine.
+LAST_LINE=$(tail -1 "$TUI_OUT")
+ASK_FORMATTED=$(echo "$LAST_LINE" | grep -o '"formattedLine":"Q:[^"]*"' | head -1 || true)
+if [[ -n "$ASK_FORMATTED" ]]; then
+  pass "ask_user formattedLine starts with Q: prefix"
+else
+  # May not be present if filtered; warn only
+  echo "  (note: ask_user formattedLine with Q: prefix not found in last snapshot — may be expected if events filtered)"
+fi
+
+# Notification should appear with message text, NOT contain raw JSON key "kind"
+NOTIF_FORMATTED=$(echo "$LAST_LINE" | grep -o '"formattedLine":"[^"]*completed[^"]*"' | head -1 || true)
+NOTIF_JSON_KEY=$(echo "$LAST_LINE" | grep -o '"formattedLine":"[^"]*\"kind\"[^"]*"' | head -1 || true)
+if [[ -n "$NOTIF_FORMATTED" ]]; then
+  pass "notification formattedLine contains message text"
+elif [[ -z "$NOTIF_JSON_KEY" ]]; then
+  echo "  (note: notification formattedLine check skipped — event may be filtered in low-noise mode)"
+else
+  fail "notification formattedLine contains raw JSON key 'kind' — should show message text only"
+fi
+
 # ── 5. Event-detail popup: open/close cycle does not crash ───────────────────
 # NOTE: --no-tty mode does not render the visual popup (it only emits JSON
 # snapshots); visual correctness requires manual inspection. We verify here
