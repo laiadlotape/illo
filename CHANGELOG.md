@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-07
+
 ### Added
 
 - Live session recorder: `bin/record.sh` (start/stop/toggle/status/gif), `/illo-record` slash command, and `r` key in TUI events focus to toggle asciinema recording with a `● REC` status-bar indicator; casts auto-convert to gif via `agg` on stop.
+
+### Fixed
+
+- `bin/record.sh stop`: detach the readonly tmux client from the source session before killing the recording server — `tmux attach -r` exits cleanly, giving asciinema time to flush and write the cast file (previously the cast was silently dropped).
+- TUI `r` key: recording features are disabled when `asciinema` is not installed; pressing `r` without it shows a clear install hint instead of silently failing.
 
 ## [0.4.1] - 2026-05-07
 
@@ -209,7 +216,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Click-to-resume: "resume here" button writes `pending_resume.json`; the
   `UserPromptSubmit` hook injects context into the next Claude turn.
 
-[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/laiadlotape/illo/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/laiadlotape/illo/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/laiadlotape/illo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/laiadlotape/illo/compare/v0.2.0...v0.3.0

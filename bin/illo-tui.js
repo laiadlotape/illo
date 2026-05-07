@@ -46,6 +46,8 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const TMUX_SEND = path.join(PLUGIN_ROOT, 'bin', 'tmux-send.sh');
 const RECORD_SH = path.join(PLUGIN_ROOT, 'bin', 'record.sh');
 const REC_STATE_FILE = path.join(os.tmpdir(), 'illo-rec-state.txt');
+// Check once at startup; recording features are silently disabled when absent.
+const ASCIINEMA_AVAILABLE = spawnSync('which', ['asciinema'], { stdio: 'ignore' }).status === 0;
 
 // ─── port discovery ──────────────────────────────────────────────────────────
 function discoverPort() {
@@ -1976,13 +1978,13 @@ function handleEventsKey(key, port) {
       break;
     }
     case 'r': {
-      // Toggle session recording via bin/record.sh
+      if (!ASCIINEMA_AVAILABLE) {
+        showToast('recording requires asciinema — pip install asciinema');
+        return;
+      }
       const proc = spawn('bash', [RECORD_SH, 'toggle'], { stdio: 'ignore' });
       appState.recording = !appState.recording;
-      const msg = appState.recording
-        ? 'recording started'
-        : 'recording stopped — converting gif…';
-      showToast(msg);
+      showToast(appState.recording ? 'recording started' : 'recording stopped — converting gif…');
       proc.unref();
       scheduleRender();
       return;

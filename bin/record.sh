@@ -4,12 +4,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_FILE="${TMPDIR:-/tmp}/illo-rec-state.txt"
-REC_SOCK="illo-rec"   # isolated tmux socket name
+REC_SOCK="illo-rec"
 
 out_dir="${ILLO_SIDEBAR_HOME:-$HOME/.claude/illo-sidebar}/recordings"
 
 cmd_start() {
   [[ -n "${TMUX:-}" ]] || { echo "error: not in a tmux session" >&2; exit 1; }
+  command -v asciinema &>/dev/null || {
+    echo "error: asciinema not installed (pip install asciinema)" >&2; exit 1;
+  }
   if [[ -f "$STATE_FILE" ]]; then
     echo "Already recording → $(awk '{print $2}' "$STATE_FILE")"
     exit 0
@@ -21,22 +24,30 @@ cmd_start() {
   W=$(tmux display-message -p '#{window_width}')
   H=$(tmux display-message -p '#{window_height}')
   tmux -L "$REC_SOCK" -f /dev/null new-session -d -s rec -x "$W" -y "$H" \
-    "asciinema rec --quiet '$CAST' -- tmux -S '$SOCK' attach -t '$SRC' -r; true"
-  echo "$REC_SOCK $CAST" > "$STATE_FILE"
+    "asciinema rec --quiet '$CAST' -- tmux -S '$SOCK' attach -t '$SRC' -r"
+  echo "$REC_SOCK $CAST $SRC" > "$STATE_FILE"
   printf 'recording started\ncast: %s\n' "$CAST"
 }
 
 cmd_stop() {
   [[ -f "$STATE_FILE" ]] || { echo "not recording"; exit 0; }
-  read -r SOCK CAST < "$STATE_FILE"
-  # Detach the recording client gently — this lets asciinema's child process
-  # (tmux attach -r) exit cleanly and asciinema flush the cast to disk.
-  tmux -L "$SOCK" -f /dev/null detach-client -s rec 2>/dev/null || true
-  sleep 1   # wait for asciinema to finalise the cast file
+  read -r SOCK CAST SRC < "$STATE_FILE"
+
+  # Detach the recording's readonly tmux client from the source session.
+  # This makes `tmux attach -r` (asciinema's subprocess) exit cleanly,
+  # which triggers asciinema to finalise and flush the cast to disk.
+  tmux list-clients -t "$SRC" -F '#{client_name} #{client_readonly}' 2>/dev/null \
+    | awk '$2 == "1" {print $1}' \
+    | while read -r client; do
+        tmux detach-client -t "$client" 2>/dev/null || true
+      done
+
+  sleep 0.8   # let asciinema finish writing
   tmux -L "$SOCK" -f /dev/null kill-server 2>/dev/null || true
   rm -f "$STATE_FILE"
+
   if [[ ! -f "$CAST" ]]; then
-    printf 'recording stopped (cast file not found — may not have saved)\n'
+    printf 'recording stopped (cast not saved — asciinema may have exited early)\n' >&2
     exit 1
   fi
   printf 'recording stopped\ncast: %s\n' "$CAST"
