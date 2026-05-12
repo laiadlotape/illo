@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-12
+
+### Added
+
+- `bin/illo-update.sh`: shell helper that runs `claude plugin update illo`, gracefully stops the running daemon (SIGTERM → SIGKILL after 5s), and prints instructions for restarting. Supports `--help` (#17).
+- `/illo-update` slash command: shells out to `bin/illo-update.sh` and reports the result (#17).
+- SessionStart drift check: on each session start, a background job compares the installed plugin version against the GitHub `main` branch. If versions differ, a `notification` event is posted to the sidebar with a prompt to run `/illo-update`. The check is wrapped in `timeout 2` and never blocks the hook (#17).
+
 ### Fixed
 
-- `tests/ux.spec.js`: replace fragile `.locator('.item').first()` in the agent-identity test with a title-anchored locator, and update `clearAllItems` to accept `page` and await DOM drain via `waitForFunction` before proceeding, eliminating the WebSocket re-render race.
+- `tests/ux.spec.js`: replace fragile `.locator('.item').first()` in the agent-identity test with a title-anchored locator immune to ordering races (#13).
 - `changelog-enforcer.yml`: release-cut PRs (which migrate `[Unreleased]` lines into a new `## [<semver>]` section) no longer fail the gate. The workflow now also passes when a new version heading is introduced in the diff (#26).
 
 ## [0.4.3] - 2026-05-07
@@ -227,7 +235,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Click-to-resume: "resume here" button writes `pending_resume.json`; the
   `UserPromptSubmit` hook injects context into the next Claude turn.
 
-[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/laiadlotape/illo/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/laiadlotape/illo/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/laiadlotape/illo/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/laiadlotape/illo/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/laiadlotape/illo/compare/v0.4.0...v0.4.1
