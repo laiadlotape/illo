@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `doc-drift.yml` and `triage.yml`: add `id-token: write` permission so `anthropics/claude-code-action@v1` can fetch its OIDC token. Both workflows were failing on every run with "Could not fetch an OIDC token".
+
 ## [0.5.0] - 2026-05-12
 
 ### Added
