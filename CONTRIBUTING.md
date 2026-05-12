@@ -97,6 +97,8 @@ All test scripts live in `tests/` and are run from that directory.
 
 Before reporting any change as "done", run `npm run test:all` locally.
 
+`npm audit` also runs in CI on every PR and surfaces dev-dep vulnerabilities (audit level: moderate).
+
 ## Code style
 
 - Vanilla ES modules throughout. No build step, no transpiler, no bundler.

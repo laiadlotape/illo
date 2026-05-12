@@ -20,6 +20,14 @@ A maintainer will acknowledge the report and follow up within a few days.
   `~/.claude/illo-sidebar/vcr/`. Recordings may include prompt text and tool
   inputs. Do not share recording files that contain sensitive prompts.
 
+## Supply chain posture
+
+- Runtime is Node stdlib only — daemon, hooks, SDKs, and TUI carry zero runtime dependencies.
+- The only `npm install` permitted is `cd tests && npm ci` for Playwright (dev only).
+- GitHub Actions are pinned to commit SHAs. Dependabot reviews bumps weekly (group PRs).
+- `npm audit` runs in CI against `tests/` on every PR.
+- illo is distributed via the Claude Code plugin marketplace, not published to npm — the project itself is not a supply-chain poisoning target.
+
 ## In Scope
 
 - `daemon/server.js` — the HTTP + WebSocket server
