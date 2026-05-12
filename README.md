@@ -197,7 +197,12 @@ bash bin/record.sh gif <cast-file>                      # manual conversion
 | `/illo-record [stop\|status]` | Start/stop session recording |
 | `/illo-status` | Daemon health + pending item count |
 | `/illo-resume [item_id]` | List or mark unresolved resume items |
+| `/illo-update` | Update the plugin and restart the daemon |
 | `/illo-web` | Open the browser UI fallback |
+
+### Plugin updates
+
+Run `/illo-update` to pull the latest version of illo and gracefully restart the daemon in one step. If your installed version drifts from the `main` branch on GitHub, the SessionStart hook will post a notice to the sidebar automatically — so you will see an "update available" notification at the start of your next Claude session without having to check manually.
 
 ---
 
