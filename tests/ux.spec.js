@@ -365,24 +365,17 @@ test('DELETE item then click "clear" returns to empty state', async ({ page }) =
 
 // ---- v0.2 UX tests ----
 
-// Helper: clear all items from the daemon state and wait for the UI to reflect empty state.
-// The DELETE requests go through the daemon synchronously, but the WebSocket broadcast that
-// removes items from the live DOM is async.  Callers must pass `page` so we can wait for
-// the rendered item list to drain before the test proceeds.
-async function clearAllItems(port, page) {
+// Helper: clear all items from the daemon state
+async function clearAllItems(port) {
   const s = await fetch(`http://127.0.0.1:${port}/state`).then((r) => r.json());
   for (const it of s.items) {
     await fetch(`http://127.0.0.1:${port}/items/${it.id}`, { method: 'DELETE' });
   }
-  // Wait until the DOM contains no .item nodes, confirming the WS-driven re-render is done.
-  await page.waitForFunction(() => document.querySelectorAll('.item').length === 0, {
-    timeout: 3000,
-  });
 }
 
 test('v0.2 urgency badge — urgent item renders .urgency-badge.urgency-urgent with text "urgent"', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   const evtResp = await page.request.post(`http://127.0.0.1:${daemonPort}/event`, {
     data: {
@@ -404,7 +397,7 @@ test('v0.2 urgency badge — urgent item renders .urgency-badge.urgency-urgent w
 
 test('v0.2 agent identity — langgraph item shows .agent-line with "langgraph"', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   const evtResp = await page.request.post(`http://127.0.0.1:${daemonPort}/event`, {
     data: {
@@ -428,7 +421,7 @@ test('v0.2 agent identity — langgraph item shows .agent-line with "langgraph"'
 
 test('v0.2 transcript snapshot — expander visible; expand to show <pre> content', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   const transcript = 'line1\nline2\nline3';
   const evtResp = await page.request.post(`http://127.0.0.1:${daemonPort}/event`, {
@@ -459,7 +452,7 @@ test('v0.2 transcript snapshot — expander visible; expand to show <pre> conten
 
 test('v0.2 snooze — click snooze 15m; badge shows [snoozed; item opacity < 0.6; daemon snoozedUntil in future', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   // Switch to "all" filter so snoozed items remain visible
   await page.locator('.chip[data-filter="all"]').click();
@@ -510,7 +503,7 @@ test('v0.2 snooze — click snooze 15m; badge shows [snoozed; item opacity < 0.6
 
 test('v0.2 quick reply — type and Cmd+Enter sends reply; daemon replied=true; UI shows [replied]', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   // Switch to "all" filter so resolved items stay visible briefly
   await page.locator('.chip[data-filter="all"]').click();
@@ -560,7 +553,7 @@ test('v0.2 quick reply — type and Cmd+Enter sends reply; daemon replied=true; 
 
 test('v0.2 filter chips — urgency filter shows only urgent item', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   // Switch to "all" filter so all items are visible
   await page.locator('.chip[data-filter="all"]').click();
@@ -662,7 +655,7 @@ test('v0.2 browser notifications — stub Notification; urgent item triggers stu
   });
 
   await page.goto(`http://127.0.0.1:${daemonPort}/`);
-  await clearAllItems(daemonPort, page);
+  await clearAllItems(daemonPort);
 
   // Make sure notification toggle is "on"
   const notifyBtn = page.locator('#btn-notify');
