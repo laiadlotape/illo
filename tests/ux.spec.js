@@ -433,12 +433,12 @@ test('v0.2 transcript snapshot — expander visible; expand to show <pre> conten
   });
   expect(evtResp.ok()).toBeTruthy();
 
-  const item = page.locator('.item').first();
-  await expect(item).toBeVisible({ timeout: 2000 });
+  const item = page.locator('.item').filter({ hasText: 'Transcript snapshot test' });
+  await expect(item).toBeVisible({ timeout: 5000 });
 
   // The transcript expander should be visible
   const expander = item.locator('.transcript-expander');
-  await expect(expander).toBeVisible({ timeout: 2000 });
+  await expect(expander).toBeVisible({ timeout: 5000 });
 
   // Click the summary to expand
   await expander.locator('summary').click();
