@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `tests/ux.spec.js`: replace fragile `.locator('.item').first()` in the agent-identity test with a title-anchored locator, and update `clearAllItems` to accept `page` and await DOM drain via `waitForFunction` before proceeding, eliminating the WebSocket re-render race.
+
 ## [0.4.3] - 2026-05-07
 
 ### Fixed
