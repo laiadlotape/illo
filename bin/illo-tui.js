@@ -265,6 +265,93 @@ const ILLO_HOME = process.env.ILLO_SIDEBAR_HOME ||
   `${os.homedir()}/.claude/illo-sidebar`;
 const TUI_PREFS_FILE = path.join(ILLO_HOME, 'tui-prefs.json');
 
+const ILLO_CONFIG_HOME = process.env.ILLO_CONFIG_HOME || path.join(os.homedir(), '.claude', 'illo');
+const ILLO_CONFIG_FILE = path.join(ILLO_CONFIG_HOME, 'config.json');
+const ILLO_CONFIG_TMP  = ILLO_CONFIG_FILE + '.tmp';
+
+const CONFIG_DEFAULTS = {
+  $schema: 'illo-config/v1',
+  version: 1,
+  keybindings: { compose: {}, events: {}, global: {} },
+  theme: { name: 'default', accent: 'cyan' },
+  filters: { defaultMode: 'low-noise' },
+  display: {
+    showSessionAge: true,
+    showProject: true,
+    showBranch: true,
+    showCwd: false,
+    expandSentByDefault: false,
+  },
+  compose: { wrap: true },
+};
+
+function deepMerge(defaults, overrides) {
+  const out = Object.assign({}, defaults);
+  for (const k of Object.keys(overrides)) {
+    if (overrides[k] !== null && typeof overrides[k] === 'object' && !Array.isArray(overrides[k])
+        && defaults[k] !== null && typeof defaults[k] === 'object') {
+      out[k] = deepMerge(defaults[k], overrides[k]);
+    } else {
+      out[k] = overrides[k];
+    }
+  }
+  return out;
+}
+
+function validateConfig(raw) {
+  // Deep-merge with defaults so missing keys get filled in.
+  // Unknown keys in raw are preserved (forward-compat for hand-edits).
+  return deepMerge(CONFIG_DEFAULTS, typeof raw === 'object' && raw !== null ? raw : {});
+}
+
+function loadConfig() {
+  // 1. Try new config.json
+  try {
+    const raw = JSON.parse(fs.readFileSync(ILLO_CONFIG_FILE, 'utf8'));
+    return validateConfig(raw);
+  } catch {
+    // fall through to migration
+  }
+  // 2. Migrate from tui-prefs.json if present
+  const prefs = loadTuiPrefs();
+  const migrated = validateConfig({});
+  if (prefs.composeWrap !== undefined) migrated.compose.wrap = prefs.composeWrap;
+  // Write migrated config so future starts skip this path
+  saveConfig(migrated);
+  return migrated;
+}
+
+function saveConfig(cfg) {
+  try {
+    fs.mkdirSync(ILLO_CONFIG_HOME, { recursive: true });
+    fs.writeFileSync(ILLO_CONFIG_TMP, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    fs.renameSync(ILLO_CONFIG_TMP, ILLO_CONFIG_FILE);
+  } catch {
+    // non-fatal
+  }
+}
+
+function getConfig(dotPath, defaultVal) {
+  const parts = dotPath.split('.');
+  let cur = illoConfig;
+  for (const p of parts) {
+    if (cur === null || typeof cur !== 'object' || !(p in cur)) return defaultVal;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+function setConfig(dotPath, value) {
+  const parts = dotPath.split('.');
+  let cur = illoConfig;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] === null || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
+  saveConfig(illoConfig);
+}
+
 function loadTuiPrefs() {
   try {
     const raw = fs.readFileSync(TUI_PREFS_FILE, 'utf8');
@@ -283,6 +370,7 @@ function saveTuiPrefs(prefs) {
   }
 }
 
+const illoConfig = loadConfig();
 const tuiPrefs = loadTuiPrefs();
 
 // ─── Application state ────────────────────────────────────────────────────────
@@ -307,7 +395,7 @@ const appState = {
     cur: { row: 0, col: 0 },
     visibleRowOffset: 0,
     colOffset: 0,
-    wrap: tuiPrefs.composeWrap !== undefined ? tuiPrefs.composeWrap : true,
+    wrap: getConfig('compose.wrap', true),
     dirty: false,
     undoStack: [],
     redoStack: [],
@@ -651,9 +739,7 @@ function toggleWrap() {
   appState.compose.colOffset = 0;
   appState.compose.visibleRowOffset = 0;
   // Persist preference
-  const prefs = loadTuiPrefs();
-  prefs.composeWrap = appState.compose.wrap;
-  saveTuiPrefs(prefs);
+  setConfig('compose.wrap', appState.compose.wrap);
   showToast(`wrap ${appState.compose.wrap ? 'on' : 'off'}`);
 }
 
