@@ -104,6 +104,7 @@ closes it.
 | `v` | Toggle filter: low-noise (default) ↔ verbose |
 | `x` | Clear resolved events from the log view |
 | `r` | Toggle session recording (asciinema → gif via `agg`). Recordings go to `~/.claude/illo-sidebar/recordings/`. `● REC` indicator appears in the status bar while active. |
+| `Tab` | Toggle expand/collapse of selected event (shows full body inline; `▸`/`▾` indicator on each row) |
 | `Enter` | Open event-detail popup (kind, urgency, snippet, transcript snapshot — wrapping, scrollable) |
 | `Esc` / `q` | Close event-detail popup |
 | `↑` / `↓` | Scroll popup content one line (while popup is open) |
@@ -270,6 +271,10 @@ Long compositions deserve a real editor. `Ctrl-E`:
 7. Deletes the tmp file.
 
 Editor exits non-zero leave the buffer untouched and toast a warning.
+
+## Event row suffix
+
+Each event row shows a dimmed suffix with session age, project name, and git branch (configurable in the settings panel or `docs/config.md`). For example: `· 2m · my-project · feat/pr4a`. Fields are enabled individually via `display.showSessionAge`, `display.showProject`, `display.showBranch`, and `display.showCwd`.
 
 ## Event log filters
 

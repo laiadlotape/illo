@@ -387,6 +387,7 @@ const appState = {
     eventScroll: 0,
     eventFilter: 'low-noise',  // 'low-noise' | 'verbose'
     focus: 'compose',          // 'compose' | 'events'
+    expandedIds: new Set(),    // ids of expanded event rows
     helpOpen: false,           // full help overlay
   },
 
@@ -859,6 +860,28 @@ function fmtHHMM(ts) {
   return `${h}:${m}`;
 }
 
+function fmtAge(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h`;
+}
+
+function eventSuffix(ev) {
+  const parts = [];
+  if (getConfig('display.showSessionAge', true) && ev.createdAt)
+    parts.push(fmtAge(ev.createdAt));
+  if (getConfig('display.showProject', true) && ev.projectName)
+    parts.push(ev.projectName);
+  if (getConfig('display.showBranch', true) && ev.gitBranch)
+    parts.push(ev.gitBranch);
+  if (getConfig('display.showCwd', false) && ev.cwd)
+    parts.push(ev.cwd.replace(os.homedir(), '~'));
+  return parts.length ? ' · ' + parts.join(' · ') : '';
+}
+
 function eventTitle(ev) {
   // Use the daemon's normalized title; for sent items prefer payload.text first line.
   if (ev.kind === 'sent' && ev.payload?.text) {
@@ -1025,21 +1048,58 @@ function render() {
   const endIdx = Math.min(evs.length, startIdx + eventRows);
   const slice = evs.slice(startIdx, endIdx);
 
+  // Build a flat list of display rows (header + optional body lines).
+  // Each entry: { ev, isBody, bodyLine? }
+  const displayRows = [];
+  for (const ev of slice) {
+    const isExpanded = appState.view.expandedIds.has(ev.id);
+    displayRows.push({ ev, isBody: false });
+    if (isExpanded) {
+      const bodyLines = formatEventBody(ev).split('\n').filter(l => l.trim());
+      const capped = bodyLines.slice(0, 5);
+      for (const bl of capped) displayRows.push({ ev, isBody: true, bodyLine: bl });
+    }
+  }
+  // Trim to fit eventRows
+  const visibleDisplayRows = displayRows.slice(0, eventRows);
+
   for (let r = 0; r < eventRows; r++) {
     const rowNum = eventsStart + r;
     out.push(moveTo(rowNum, 1) + eraseLine());
-    const ev = slice[r];
-    if (!ev) continue;
+    const dr = visibleDisplayRows[r];
+    if (!dr) continue;
+    const { ev, isBody, bodyLine } = dr;
+
+    // Determine if this event is the "selected" one.
+    const evIdx = startIdx + slice.indexOf(ev);
+    const isSelected = appState.view.focus === 'events'
+      && (evIdx === evs.length - 1 - scroll);
+
+    if (isBody) {
+      // Body row: indented, dim
+      if (isSelected) out.push(reverse());
+      out.push(color(C.dim_c) + '  ↳ ' + truncate(bodyLine, cols - 6) + resetAttrs());
+      if (isSelected) out.push(resetAttrs());
+      continue;
+    }
+
+    // Header row
     const time = fmtHHMM(ev.createdAt || Date.now());
-    const kindStr = pad(ev.kind, 9);
-    const titleAvail = Math.max(8, cols - 2 - 5 - 1 - 9 - 3 - 4);
+    const expandIndicator = appState.view.expandedIds.has(ev.id) ? '▾' : '▸';
+    const suffix = eventSuffix(ev);
+    // Reserve cols for: 1 space + 5 time + 3 ' · ' + 9 kind + 3 ' · ' + 1 expand + 1 space = 23
+    // Plus suffix at end (dimmed). Give title the middle slice.
+    const suffixLen = suffix.length;
+    const titleAvail = Math.max(4, cols - 24 - suffixLen);
     const titleText = truncate(formatEventBody(ev).split('\n')[0], titleAvail);
-    const isSelected = appState.view.focus === 'events' && (startIdx + r === evs.length - 1 - scroll);
+
     if (isSelected) out.push(reverse());
     out.push(color(C.dim_c) + ' ' + time + ' · ' + resetAttrs());
-    out.push(color(kindColor(ev.kind)) + kindStr + resetAttrs());
+    out.push(color(kindColor(ev.kind)) + pad(ev.kind, 9) + resetAttrs());
     out.push(color(urgencyColor(ev.urgency)) + ' · ' + resetAttrs());
+    out.push(color(C.dim_c) + expandIndicator + ' ' + resetAttrs());
     out.push(color(C.white) + titleText + resetAttrs());
+    if (suffix) out.push(color(C.dim_c) + suffix + resetAttrs());
     if (isSelected) out.push(resetAttrs());
   }
 
@@ -1972,8 +2032,14 @@ function handleWsMessage(msg) {
     case 'item:update':
       if (msg.item) {
         const idx = appState.events.findIndex((it) => it.id === msg.item.id);
-        if (idx === -1) appState.events.push(msg.item);
-        else appState.events[idx] = msg.item;
+        if (idx === -1) {
+          appState.events.push(msg.item);
+          if (getConfig('display.expandSentByDefault', false) && msg.item.kind === 'sent') {
+            appState.view.expandedIds.add(msg.item.id);
+          }
+        } else {
+          appState.events[idx] = msg.item;
+        }
       }
       break;
     case 'item:remove':
@@ -2399,6 +2465,22 @@ function handleEventsKey(key, port) {
         showToast(`cleared ${n} resolved event${n === 1 ? '' : 's'}`);
       }
       break;
+    }
+    case 'tab': {
+      // Toggle expand/collapse of the selected event
+      const evs2 = visibleEvents();
+      const maxScroll2 = Math.max(0, evs2.length - 1);
+      const scroll2 = Math.min(appState.view.eventScroll, maxScroll2);
+      const selIdx = evs2.length - 1 - scroll2;
+      const selEv = evs2[selIdx];
+      if (selEv) {
+        if (appState.view.expandedIds.has(selEv.id))
+          appState.view.expandedIds.delete(selEv.id);
+        else
+          appState.view.expandedIds.add(selEv.id);
+      }
+      scheduleRender();
+      return;
     }
     case 'enter': {
       // Open event-detail popup for currently focused event
