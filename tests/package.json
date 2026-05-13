@@ -12,6 +12,6 @@
     "test:all": "npm run test:unit && npm run test:dogfood && npm run test:sdk-python && npm run test:integration && npm run test:tui && npm run test:ux"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.0"
+    "@playwright/test": "^1.60.0"
   }
 }
