@@ -598,14 +598,97 @@ function deleteWordBackward() {
     return;
   }
   let i = c.cur.col;
-  // Skip whitespace backward
-  while (i > 0 && /\s/.test(line[i - 1])) i--;
-  // Then skip word chars
-  while (i > 0 && !/\s/.test(line[i - 1])) i--;
+  // Skip non-word chars backward
+  while (i > 0 && !isWordChar(line[i - 1])) i--;
+  // Skip word chars backward
+  while (i > 0 && isWordChar(line[i - 1])) i--;
   c.lines[c.cur.row] = line.slice(0, i) + line.slice(c.cur.col);
   c.cur.col = i;
   markDirty();
   endUndoGroup();
+}
+
+function deleteWordForward() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col >= line.length) {
+    // At EOL — join with next line (same as Delete key)
+    if (c.cur.row < c.lines.length - 1) {
+      c.lines[c.cur.row] = line + c.lines[c.cur.row + 1];
+      c.lines.splice(c.cur.row + 1, 1);
+      markDirty();
+    }
+    endUndoGroup();
+    return;
+  }
+  let i = c.cur.col;
+  // Skip whitespace forward
+  while (i < line.length && /\s/.test(line[i])) i++;
+  // Skip word chars forward
+  while (i < line.length && !/\s/.test(line[i])) i++;
+  c.lines[c.cur.row] = line.slice(0, c.cur.col) + line.slice(i);
+  markDirty();
+  endUndoGroup();
+}
+
+function moveLineUp() {
+  pushUndo(true);
+  const c = appState.compose;
+  if (c.cur.row === 0) { endUndoGroup(); return; }
+  const tmp = c.lines[c.cur.row];
+  c.lines[c.cur.row] = c.lines[c.cur.row - 1];
+  c.lines[c.cur.row - 1] = tmp;
+  c.cur.row -= 1;
+  clampCursor();
+  markDirty();
+  endUndoGroup();
+}
+
+function moveLineDown() {
+  pushUndo(true);
+  const c = appState.compose;
+  if (c.cur.row >= c.lines.length - 1) { endUndoGroup(); return; }
+  const tmp = c.lines[c.cur.row];
+  c.lines[c.cur.row] = c.lines[c.cur.row + 1];
+  c.lines[c.cur.row + 1] = tmp;
+  c.cur.row += 1;
+  clampCursor();
+  markDirty();
+  endUndoGroup();
+}
+
+function duplicateLineUp() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  c.lines.splice(c.cur.row, 0, line);
+  // cursor stays on upper copy (same row)
+  markDirty();
+  endUndoGroup();
+}
+
+function duplicateLineDown() {
+  pushUndo(true);
+  const c = appState.compose;
+  const line = c.lines[c.cur.row] || '';
+  c.lines.splice(c.cur.row + 1, 0, line);
+  c.cur.row += 1;
+  markDirty();
+  endUndoGroup();
+}
+
+function cursorBufferStart() {
+  endUndoGroup();
+  appState.compose.cur.row = 0;
+  appState.compose.cur.col = 0;
+}
+
+function cursorBufferEnd() {
+  endUndoGroup();
+  const c = appState.compose;
+  c.cur.row = c.lines.length - 1;
+  c.cur.col = (c.lines[c.cur.row] || '').length;
 }
 
 // ─── editor: cursor movement ──────────────────────────────────────────────────
@@ -1795,7 +1878,7 @@ function parseKey(buf) {
   if (b0 === 0x04) return { key: 'ctrl-d', consumed: 1 };
   if (b0 === 0x05) return { key: 'ctrl-e', consumed: 1 };
   if (b0 === 0x06) return { key: 'ctrl-f', consumed: 1 };
-  if (b0 === 0x08) return { key: 'backspace', consumed: 1 };
+  if (b0 === 0x08) return { key: 'ctrl-backspace', consumed: 1 };
   if (b0 === 0x09) return { key: 'tab', consumed: 1 };
   if (b0 === 0x0a) return { key: 'enter', consumed: 1 };
   if (b0 === 0x0b) return { key: 'ctrl-k', consumed: 1 };
@@ -1827,6 +1910,9 @@ function parseKey(buf) {
       if (b2 === 0x44) return { key: 'left',   consumed: 3 };
       if (b2 === 0x48) return { key: 'home',   consumed: 3 };
       if (b2 === 0x46) return { key: 'end',    consumed: 3 };
+      // Ctrl+Delete: ESC [ 3 ; 5 ~
+      if (b2 === 0x33 && buf.length >= 6 && buf[3] === 0x3b && buf[4] === 0x35 && buf[5] === 0x7e)
+        return { key: 'ctrl-delete', consumed: 6 };
       // Delete: ESC [ 3 ~
       if (b2 === 0x33 && buf.length >= 4 && buf[3] === 0x7e)
         return { key: 'delete', consumed: 4 };
@@ -1845,15 +1931,25 @@ function parseKey(buf) {
       if (b2 === 0x31 && buf.length >= 6 && buf[3] === 0x3b) {
         const mod = buf[4];
         const b5  = buf[5];
+        if (mod === 0x32) { // Shift
+          if (b5 === 0x41) return { key: 'shift-up',   consumed: 6 };
+          if (b5 === 0x42) return { key: 'shift-down', consumed: 6 };
+        }
         if (mod === 0x35) { // Ctrl
           if (b5 === 0x41) return { key: 'ctrl-up',    consumed: 6 };
           if (b5 === 0x42) return { key: 'ctrl-down',  consumed: 6 };
           if (b5 === 0x43) return { key: 'ctrl-right', consumed: 6 };
           if (b5 === 0x44) return { key: 'ctrl-left',  consumed: 6 };
+          if (b5 === 0x48) return { key: 'ctrl-home',  consumed: 6 };
+          if (b5 === 0x46) return { key: 'ctrl-end',   consumed: 6 };
         }
         if (mod === 0x36) { // Ctrl+Shift
           if (b5 === 0x41) return { key: 'ctrl-shift-up',   consumed: 6 };
           if (b5 === 0x42) return { key: 'ctrl-shift-down', consumed: 6 };
+        }
+        if (mod === 0x0a) { // Alt+Shift (modifier 10)
+          if (b5 === 0x41) return { key: 'alt-shift-up',   consumed: 6 };
+          if (b5 === 0x42) return { key: 'alt-shift-down', consumed: 6 };
         }
       }
       // Bracketed paste markers: ESC [ 200 ~ (6 bytes) / ESC [ 201 ~ (6 bytes)
@@ -1875,6 +1971,8 @@ function parseKey(buf) {
       if (b2 === 0x46) return { key: 'end',  consumed: 3 };
       return { key: `esc-O${String.fromCharCode(b2)}`, consumed: 3 };
     }
+    // Alt+Backspace: ESC + 0x7f
+    if (b1 === 0x7f) return { key: 'alt-backspace', consumed: 2 };
     // Alt-letter: ESC + letter
     if (b1 >= 0x61 && b1 <= 0x7a) {
       return { key: `alt-${String.fromCharCode(b1)}`, consumed: 2 };
@@ -2160,6 +2258,32 @@ function handleComposeKey(key, port) {
       toggleWrap();
       scheduleRender();
       return;
+    case 'ctrl-backspace':
+    case 'alt-backspace':
+      deleteWordBackward();
+      scheduleRender();
+      return;
+    case 'ctrl-delete':
+    case 'alt-d':
+      deleteWordForward();
+      scheduleRender();
+      return;
+    case 'shift-up':
+      moveLineUp();
+      scheduleRender();
+      return;
+    case 'shift-down':
+      moveLineDown();
+      scheduleRender();
+      return;
+    case 'alt-shift-up':
+      duplicateLineUp();
+      scheduleRender();
+      return;
+    case 'alt-shift-down':
+      duplicateLineDown();
+      scheduleRender();
+      return;
   }
 
   // Cursor + text editing
@@ -2181,6 +2305,12 @@ function handleComposeKey(key, port) {
       break;
     case 'end':
       cursorEnd();
+      break;
+    case 'ctrl-home':
+      cursorBufferStart();
+      break;
+    case 'ctrl-end':
+      cursorBufferEnd();
       break;
     case 'pgup':
       endUndoGroup();

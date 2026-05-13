@@ -67,13 +67,20 @@ closes it.
 | `Backspace` | Delete char left (joins lines at col 0) |
 | `Delete` | Delete char right (joins next line at end) |
 | `←` `→` `↑` `↓` | Move cursor (with line-wrap on horizontal motion) |
-| `Ctrl-←` / `Ctrl-→` | Jump cursor left / right by one word (`[A-Za-z0-9_]` boundary); wraps to prev/next line at line boundaries |
+| `Ctrl-←` / `Ctrl-→` | Jump cursor left / right by one word (`[A-Za-z0-9_]` boundary); wraps to prev/next line at line boundaries. Word boundaries use identifier semantics (`[A-Za-z0-9_]`) for all word-delete and word-jump operations. |
 | `Ctrl-↑` / `Ctrl-↓` | Focus toggle: move focus to events log / back to compose (works from any pane) |
 | `Ctrl-Shift-↑` / `Ctrl-Shift-↓` | Paragraph motion in prompt pane: jump to previous / next blank line (`\x1b[1;6A` / `\x1b[1;6B`) |
 | `Home` / `End` | Beginning / end of line |
 | `PgUp` / `PgDn` | Scroll one screen |
 | `Ctrl-A` | Beginning of line (alias for `Home`) |
-| `Ctrl-W` | Delete word backward |
+| `Ctrl-W` / `Ctrl-Backspace` / `Alt-Backspace` | Delete word backward |
+| `Ctrl-Delete` / `Alt-D` | Delete word forward |
+| `Shift-↑` | Move current line up |
+| `Shift-↓` | Move current line down |
+| `Alt-Shift-↑` | Duplicate current line upward (cursor stays on upper copy) |
+| `Alt-Shift-↓` | Duplicate current line downward (cursor moves to the copy) |
+| `Ctrl-Home` | Jump to buffer start (row 0, col 0) |
+| `Ctrl-End` | Jump to buffer end (last row, end of line) |
 | `Ctrl-U` | Delete from cursor backward to beginning of line |
 | `Ctrl-K` | Kill to end of line (or join next line at EOL) |
 | `Ctrl-Z` | Undo |

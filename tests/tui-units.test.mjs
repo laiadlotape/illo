@@ -506,3 +506,186 @@ describe('config', () => {
     }
   });
 });
+
+// ─── editor keybindings tests (PR #2) ─────────────────────────────────────────
+// Inline-replicated pure functions (kept in sync with bin/illo-tui.js).
+// Stubs for side-effecting helpers:
+function isWordChar(ch) {
+  return ch !== undefined && /[A-Za-z0-9_]/.test(ch);
+}
+
+function makeState(lines, row, col) {
+  return { compose: { lines: [...lines], cur: { row, col } } };
+}
+
+function clampCursor(state) {
+  const c = state.compose;
+  c.cur.row = Math.max(0, Math.min(c.cur.row, c.lines.length - 1));
+  c.cur.col = Math.max(0, Math.min(c.cur.col, (c.lines[c.cur.row] || '').length));
+}
+
+function deleteWordForward(state) {
+  const c = state.compose;
+  const line = c.lines[c.cur.row] || '';
+  if (c.cur.col >= line.length) {
+    if (c.cur.row < c.lines.length - 1) {
+      c.lines[c.cur.row] = line + c.lines[c.cur.row + 1];
+      c.lines.splice(c.cur.row + 1, 1);
+    }
+    return;
+  }
+  let i = c.cur.col;
+  while (i < line.length && /\s/.test(line[i])) i++;
+  while (i < line.length && !/\s/.test(line[i])) i++;
+  c.lines[c.cur.row] = line.slice(0, c.cur.col) + line.slice(i);
+}
+
+function moveLineUp(state) {
+  const c = state.compose;
+  if (c.cur.row === 0) return;
+  const tmp = c.lines[c.cur.row];
+  c.lines[c.cur.row] = c.lines[c.cur.row - 1];
+  c.lines[c.cur.row - 1] = tmp;
+  c.cur.row -= 1;
+  clampCursor(state);
+}
+
+function moveLineDown(state) {
+  const c = state.compose;
+  if (c.cur.row >= c.lines.length - 1) return;
+  const tmp = c.lines[c.cur.row];
+  c.lines[c.cur.row] = c.lines[c.cur.row + 1];
+  c.lines[c.cur.row + 1] = tmp;
+  c.cur.row += 1;
+  clampCursor(state);
+}
+
+function duplicateLineUp(state) {
+  const c = state.compose;
+  const line = c.lines[c.cur.row] || '';
+  c.lines.splice(c.cur.row, 0, line);
+  // cursor stays on upper copy (same row)
+}
+
+function duplicateLineDown(state) {
+  const c = state.compose;
+  const line = c.lines[c.cur.row] || '';
+  c.lines.splice(c.cur.row + 1, 0, line);
+  c.cur.row += 1;
+}
+
+function cursorBufferStart(state) {
+  state.compose.cur.row = 0;
+  state.compose.cur.col = 0;
+}
+
+function cursorBufferEnd(state) {
+  const c = state.compose;
+  c.cur.row = c.lines.length - 1;
+  c.cur.col = (c.lines[c.cur.row] || '').length;
+}
+
+describe('editor keybindings', () => {
+  test('deleteWordForward: cursor mid-word deletes word forward', () => {
+    // "hello world", cursor at col 0 — forward-kill should eat "hello"
+    const s = makeState(['hello world'], 0, 0);
+    deleteWordForward(s);
+    assert.equal(s.compose.lines[0], ' world');
+    assert.equal(s.compose.cur.col, 0);
+  });
+
+  test('deleteWordForward: cursor at EOL joins next line', () => {
+    const s = makeState(['first', 'second'], 0, 5); // col 5 = EOL of "first"
+    deleteWordForward(s);
+    assert.equal(s.compose.lines.length, 1);
+    assert.equal(s.compose.lines[0], 'firstsecond');
+  });
+
+  test('moveLineUp: swaps current row with previous, cursor moves up', () => {
+    const s = makeState(['aaa', 'bbb', 'ccc'], 1, 2);
+    moveLineUp(s);
+    assert.equal(s.compose.lines[0], 'bbb');
+    assert.equal(s.compose.lines[1], 'aaa');
+    assert.equal(s.compose.cur.row, 0);
+  });
+
+  test('moveLineDown: swaps current row with next, cursor moves down', () => {
+    const s = makeState(['aaa', 'bbb', 'ccc'], 1, 2);
+    moveLineDown(s);
+    assert.equal(s.compose.lines[1], 'ccc');
+    assert.equal(s.compose.lines[2], 'bbb');
+    assert.equal(s.compose.cur.row, 2);
+  });
+
+  test('moveLineUp at row 0: no-op', () => {
+    const s = makeState(['only', 'line'], 0, 2);
+    moveLineUp(s);
+    assert.equal(s.compose.lines[0], 'only');
+    assert.equal(s.compose.cur.row, 0);
+  });
+
+  test('duplicateLineDown: copies current line below, cursor moves to copy', () => {
+    const s = makeState(['hello', 'world'], 0, 3);
+    duplicateLineDown(s);
+    assert.equal(s.compose.lines.length, 3);
+    assert.equal(s.compose.lines[0], 'hello');
+    assert.equal(s.compose.lines[1], 'hello');
+    assert.equal(s.compose.lines[2], 'world');
+    assert.equal(s.compose.cur.row, 1);
+  });
+
+  test('duplicateLineUp: copies current line above, cursor stays on upper copy', () => {
+    const s = makeState(['hello', 'world'], 1, 2);
+    duplicateLineUp(s);
+    assert.equal(s.compose.lines.length, 3);
+    assert.equal(s.compose.lines[1], 'world');
+    assert.equal(s.compose.lines[2], 'world');
+    assert.equal(s.compose.cur.row, 1);
+  });
+
+  test('cursorBufferStart: sets row=0, col=0', () => {
+    const s = makeState(['aaa', 'bbb', 'ccc'], 2, 3);
+    cursorBufferStart(s);
+    assert.equal(s.compose.cur.row, 0);
+    assert.equal(s.compose.cur.col, 0);
+  });
+
+  test('cursorBufferEnd: sets row=last, col=line.length', () => {
+    const s = makeState(['aaa', 'bbb', 'longer line'], 0, 0);
+    cursorBufferEnd(s);
+    assert.equal(s.compose.cur.row, 2);
+    assert.equal(s.compose.cur.col, 'longer line'.length);
+  });
+});
+
+// ─── parseKey: new sequences (PR #2) ─────────────────────────────────────────
+test('illo-tui.js source: ctrl-backspace mapped to 0x08', () => {
+  const src = fs.readFileSync(TUI, 'utf8');
+  assert.ok(src.includes("key: 'ctrl-backspace'"), 'ctrl-backspace mapping missing');
+  // 0x7f should still be plain backspace
+  assert.ok(src.includes("key: 'backspace'"), 'backspace (0x7f) mapping missing');
+});
+
+test('illo-tui.js source: ctrl-delete, shift-up, shift-down, alt-shift-up, alt-shift-down present', () => {
+  const src = fs.readFileSync(TUI, 'utf8');
+  assert.ok(src.includes("'ctrl-delete'"), 'ctrl-delete missing');
+  assert.ok(src.includes("'shift-up'"), 'shift-up missing');
+  assert.ok(src.includes("'shift-down'"), 'shift-down missing');
+  assert.ok(src.includes("'alt-shift-up'"), 'alt-shift-up missing');
+  assert.ok(src.includes("'alt-shift-down'"), 'alt-shift-down missing');
+});
+
+test('illo-tui.js source: alt-backspace, ctrl-home, ctrl-end present', () => {
+  const src = fs.readFileSync(TUI, 'utf8');
+  assert.ok(src.includes("'alt-backspace'"), 'alt-backspace missing');
+  assert.ok(src.includes("'ctrl-home'"), 'ctrl-home missing');
+  assert.ok(src.includes("'ctrl-end'"), 'ctrl-end missing');
+});
+
+test('illo-tui.js source: deleteWordBackward uses isWordChar', () => {
+  const src = fs.readFileSync(TUI, 'utf8');
+  // The old whitespace-only check should be replaced with isWordChar
+  const dwb = src.slice(src.indexOf('function deleteWordBackward'));
+  const body = dwb.slice(0, dwb.indexOf('\n}') + 2);
+  assert.ok(body.includes('isWordChar'), 'deleteWordBackward should use isWordChar');
+});

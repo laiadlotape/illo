@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- TUI compose pane: new editor keybindings — `Ctrl+Backspace`/`Alt+Backspace` (backward-kill-word), `Ctrl+Delete`/`Alt+D` (forward-kill-word), `Shift+Up`/`Shift+Down` (move line), `Alt+Shift+Up`/`Alt+Shift+Down` (duplicate line), `Ctrl+Home`/`Ctrl+End` (buffer start/end).
 - `~/.claude/illo/config.json`: persistent TUI config — theme, filters, display toggles, keybinding overrides. Migrates `tui-prefs.json` on first run. Schema documented in [`docs/config.md`](docs/config.md).
 - CI: `npm audit --audit-level=moderate` runs against `tests/` on every PR (#TBD).
 - `.github/dependabot.yml`: weekly grouped updates for `github-actions` (root) and `npm` (`tests/`).
@@ -15,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/recordings/.tape-examples/{compose-keys,event-nav,send-flow,illo-hero}.tape`: focused per-feature vhs tapes (≤12s each); rendered gifs in `docs/recordings/`.
 
 ### Changed
+- Word boundary for `Ctrl+W` and `Ctrl+Backspace` now uses identifier semantics (`[A-Za-z0-9_]`) matching `Ctrl+Left`/`Ctrl+Right`.
 - All GitHub Actions pinned to commit SHAs (was: mutable major tags). Reduces exposure to the Shai-Hulud / TeamPCP class of supply-chain compromise.
 - `SECURITY.md`: new "Supply chain posture" section documents the zero-runtime-deps contract, SHA-pinned Actions, and Dependabot cadence.
 - README rewritten with a narrative on-ramp: "Why this exists" (human-problem framing), "5-minute tour" with three short feature gifs, "Going further" link hub. Architecture detail relocated to `docs/architecture.md`.
