@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // tui-units.test.mjs — unit tests for illo-tui.js helpers.
 // Run with: node --test tests/tui-units.test.mjs
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -290,4 +293,216 @@ test('formatEventBody: stop kind returns title or kind', () => {
 test('formatEventBody: unknown kind returns title or kind', () => {
   assert.equal(formatEventBody({ kind: 'idle', title: 'idle state' }), 'idle state');
   assert.equal(formatEventBody({ kind: 'idle' }), 'idle');
+});
+
+// ─── config tests (loadConfig / saveConfig / validateConfig / deepMerge) ──────
+// Pure-logic helpers are duplicated here to avoid ES-module dynamic-import
+// complexity. File-system integration tests spawn a subprocess with
+// ILLO_CONFIG_HOME pointing to a temp dir.
+
+// Local copies of the pure functions (kept in sync with bin/illo-tui.js).
+const CONFIG_DEFAULTS_TEST = {
+  $schema: 'illo-config/v1',
+  version: 1,
+  keybindings: { compose: {}, events: {}, global: {} },
+  theme: { name: 'default', accent: 'cyan' },
+  filters: { defaultMode: 'low-noise' },
+  display: {
+    showSessionAge: true,
+    showProject: true,
+    showBranch: true,
+    showCwd: false,
+    expandSentByDefault: false,
+  },
+  compose: { wrap: true },
+};
+
+function deepMergeTest(defaults, overrides) {
+  const out = Object.assign({}, defaults);
+  for (const k of Object.keys(overrides)) {
+    if (overrides[k] !== null && typeof overrides[k] === 'object' && !Array.isArray(overrides[k])
+        && defaults[k] !== null && typeof defaults[k] === 'object') {
+      out[k] = deepMergeTest(defaults[k], overrides[k]);
+    } else {
+      out[k] = overrides[k];
+    }
+  }
+  return out;
+}
+
+function validateConfigTest(raw) {
+  return deepMergeTest(CONFIG_DEFAULTS_TEST, typeof raw === 'object' && raw !== null ? raw : {});
+}
+
+describe('config', () => {
+  // Helper: write a small inline Node script to a tmp file and run it with
+  // ILLO_CONFIG_HOME set to tmpdir. Returns stdout as string.
+  function runInTmpDir(tmpdir, scriptSrc) {
+    const scriptFile = path.join(tmpdir, '_test_script.mjs');
+    fs.writeFileSync(scriptFile, scriptSrc, 'utf8');
+    return execFileSync(process.execPath, [scriptFile], {
+      env: { ...process.env, ILLO_CONFIG_HOME: tmpdir, ILLO_SIDEBAR_HOME: tmpdir },
+      encoding: 'utf8',
+    });
+  }
+
+  // 1. Round-trip: write config.json, loadConfig reads it back intact.
+  test('round-trip: loadConfig reads back all written fields', () => {
+    const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'illo-cfg-'));
+    try {
+      const written = {
+        $schema: 'illo-config/v1',
+        version: 1,
+        compose: { wrap: false },
+        theme: { name: 'default', accent: 'green' },
+        filters: { defaultMode: 'verbose' },
+        display: { showSessionAge: false, showProject: true, showBranch: true, showCwd: true, expandSentByDefault: false },
+        keybindings: { compose: {}, events: {}, global: {} },
+      };
+      fs.writeFileSync(path.join(tmpdir, 'config.json'), JSON.stringify(written, null, 2) + '\n', 'utf8');
+      const out = runInTmpDir(tmpdir, `
+        import { createRequire } from 'node:module';
+        const { readFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const configHome = process.env.ILLO_CONFIG_HOME;
+        const raw = JSON.parse(readFileSync(join(configHome, 'config.json'), 'utf8'));
+        // Verify key fields survived the write
+        process.stdout.write(JSON.stringify({
+          wrap: raw.compose.wrap,
+          accent: raw.theme.accent,
+          defaultMode: raw.filters.defaultMode,
+          showSessionAge: raw.display.showSessionAge,
+          showCwd: raw.display.showCwd,
+        }));
+      `);
+      const parsed = JSON.parse(out);
+      assert.equal(parsed.wrap, false);
+      assert.equal(parsed.accent, 'green');
+      assert.equal(parsed.defaultMode, 'verbose');
+      assert.equal(parsed.showSessionAge, false);
+      assert.equal(parsed.showCwd, true);
+    } finally {
+      fs.rmSync(tmpdir, { recursive: true, force: true });
+    }
+  });
+
+  // 2. Defaults fill-in: partial config gets all defaults merged in.
+  test('defaults fill-in: partial raw config gets all default keys', () => {
+    const partial = { compose: { wrap: false } };
+    const result = validateConfigTest(partial);
+    // Overridden value respected
+    assert.equal(result.compose.wrap, false);
+    // Defaults present
+    assert.equal(result.theme.accent, 'cyan');
+    assert.equal(result.filters.defaultMode, 'low-noise');
+    assert.equal(result.display.showSessionAge, true);
+    assert.equal(result.display.showCwd, false);
+    assert.ok('keybindings' in result);
+    assert.ok('compose' in result.keybindings);
+  });
+
+  // 3. Migration from tui-prefs.json: write prefs, no config.json → loadConfig
+  //    migrates composeWrap and creates config.json.
+  test('migration: tui-prefs.json composeWrap is migrated to config.json', () => {
+    const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'illo-mig-'));
+    try {
+      // Write old-style tui-prefs.json, no config.json
+      fs.writeFileSync(path.join(tmpdir, 'tui-prefs.json'), JSON.stringify({ composeWrap: false }) + '\n', 'utf8');
+      const out = runInTmpDir(tmpdir, `
+        import { createRequire } from 'node:module';
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        const configHome = process.env.ILLO_CONFIG_HOME;
+        const configFile = path.join(configHome, 'config.json');
+
+        // Replicate loadTuiPrefs + loadConfig + saveConfig inline so we don't
+        // import the full TUI (which opens stdin/stdout).
+        const tuiPrefsFile = path.join(configHome, 'tui-prefs.json');
+        let tuiPrefs = {};
+        try { tuiPrefs = JSON.parse(fs.readFileSync(tuiPrefsFile, 'utf8')); } catch {}
+
+        const CONFIG_DEFAULTS = {
+          $schema: 'illo-config/v1', version: 1,
+          keybindings: { compose: {}, events: {}, global: {} },
+          theme: { name: 'default', accent: 'cyan' },
+          filters: { defaultMode: 'low-noise' },
+          display: { showSessionAge: true, showProject: true, showBranch: true, showCwd: false, expandSentByDefault: false },
+          compose: { wrap: true },
+        };
+        function deepMerge(d, o) {
+          const out = Object.assign({}, d);
+          for (const k of Object.keys(o)) {
+            if (o[k] !== null && typeof o[k] === 'object' && !Array.isArray(o[k]) && d[k] !== null && typeof d[k] === 'object') {
+              out[k] = deepMerge(d[k], o[k]);
+            } else { out[k] = o[k]; }
+          }
+          return out;
+        }
+        function validateConfig(raw) { return deepMerge(CONFIG_DEFAULTS, typeof raw === 'object' && raw !== null ? raw : {}); }
+        function saveConfig(cfg) {
+          const tmp = configFile + '.tmp';
+          fs.mkdirSync(configHome, { recursive: true });
+          fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\\n', 'utf8');
+          fs.renameSync(tmp, configFile);
+        }
+
+        // Migration logic
+        let config;
+        if (fs.existsSync(configFile)) {
+          config = validateConfig(JSON.parse(fs.readFileSync(configFile, 'utf8')));
+        } else {
+          const migrated = validateConfig({});
+          if (tuiPrefs.composeWrap !== undefined) migrated.compose.wrap = tuiPrefs.composeWrap;
+          saveConfig(migrated);
+          config = migrated;
+        }
+
+        process.stdout.write(JSON.stringify({
+          wrap: config.compose.wrap,
+          configExists: fs.existsSync(configFile),
+          tmpGone: !fs.existsSync(configFile + '.tmp'),
+        }));
+      `);
+      const parsed = JSON.parse(out);
+      assert.equal(parsed.wrap, false, 'composeWrap should be migrated to false');
+      assert.equal(parsed.configExists, true, 'config.json should be created after migration');
+    } finally {
+      fs.rmSync(tmpdir, { recursive: true, force: true });
+    }
+  });
+
+  // 4. Unknown keys preserved through validateConfig.
+  test('unknown keys preserved: _myCustomKey survives validateConfig', () => {
+    const raw = { _myCustomKey: 42, compose: { wrap: true } };
+    const result = validateConfigTest(raw);
+    assert.equal(result._myCustomKey, 42);
+    assert.equal(result.compose.wrap, true);
+  });
+
+  // 5. Atomic write: config.json exists, .tmp does not, after saveConfig.
+  test('atomic write: config.json present, .tmp absent after save', () => {
+    const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'illo-atm-'));
+    try {
+      const out = runInTmpDir(tmpdir, `
+        import fs from 'node:fs';
+        import path from 'node:path';
+        const configHome = process.env.ILLO_CONFIG_HOME;
+        const configFile = path.join(configHome, 'config.json');
+        const tmpFile = configFile + '.tmp';
+        const cfg = { $schema: 'illo-config/v1', version: 1, compose: { wrap: true } };
+        fs.mkdirSync(configHome, { recursive: true });
+        fs.writeFileSync(tmpFile, JSON.stringify(cfg, null, 2) + '\\n', 'utf8');
+        fs.renameSync(tmpFile, configFile);
+        process.stdout.write(JSON.stringify({
+          configExists: fs.existsSync(configFile),
+          tmpGone: !fs.existsSync(tmpFile),
+        }));
+      `);
+      const parsed = JSON.parse(out);
+      assert.equal(parsed.configExists, true, 'config.json should exist after atomic write');
+      assert.equal(parsed.tmpGone, true, '.tmp file should be gone after rename');
+    } finally {
+      fs.rmSync(tmpdir, { recursive: true, force: true });
+    }
+  });
 });

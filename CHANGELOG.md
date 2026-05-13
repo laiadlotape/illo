@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `~/.claude/illo/config.json`: persistent TUI config — theme, filters, display toggles, keybinding overrides. Migrates `tui-prefs.json` on first run. Schema documented in [`docs/config.md`](docs/config.md).
 - CI: `npm audit --audit-level=moderate` runs against `tests/` on every PR (#TBD).
 - `.github/dependabot.yml`: weekly grouped updates for `github-actions` (root) and `npm` (`tests/`).
 - `docs/architecture.md`: deep-dive on the send loop, event-capture flow, and file layout — moved out of README.
