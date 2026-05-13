@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - CI: `npm audit --audit-level=moderate` runs against `tests/` on every PR (#TBD).
 - `.github/dependabot.yml`: weekly grouped updates for `github-actions` (root) and `npm` (`tests/`).
+- `docs/architecture.md`: deep-dive on the send loop, event-capture flow, and file layout — moved out of README.
+- `docs/recordings/.tape-examples/{compose-keys,event-nav,send-flow,illo-hero}.tape`: focused per-feature vhs tapes (≤12s each); rendered gifs in `docs/recordings/`.
 
 ### Changed
 - All GitHub Actions pinned to commit SHAs (was: mutable major tags). Reduces exposure to the Shai-Hulud / TeamPCP class of supply-chain compromise.
 - `SECURITY.md`: new "Supply chain posture" section documents the zero-runtime-deps contract, SHA-pinned Actions, and Dependabot cadence.
+- README rewritten with a narrative on-ramp: "Why this exists" (human-problem framing), "5-minute tour" with three short feature gifs, "Going further" link hub. Architecture detail relocated to `docs/architecture.md`.
 
 ### Removed
 - `daemon/package.json`: empty manifest removed to reinforce the "Node stdlib only" runtime contract. The daemon is launched with `node daemon/server.js`; no script referenced `npm start`.
