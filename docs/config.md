@@ -3,6 +3,8 @@
 **File:** `~/.claude/illo/config.json`
 **Env override:** set `ILLO_CONFIG_HOME` to use a different directory.
 
+The settings panel (`,` in the TUI) provides an interactive editor for all fields below.
+
 The file is plain JSON. Edit it by hand, then restart the TUI to apply changes.
 Unknown keys are preserved across reads and writes (forward-compatible for
 hand-edits that precede a future release).

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- TUI settings panel: press `,` from any focus to open a modal for Display, Filters, Compose, and About. Writes `~/.claude/illo/config.json` so changes round-trip with hand edits. Keys: `j`/`k` navigate, `Space` toggle, `s` save, `r` revert, `d` reset to defaults, `Esc` cancel.
 - TUI compose pane: new editor keybindings — `Ctrl+Backspace`/`Alt+Backspace` (backward-kill-word), `Ctrl+Delete`/`Alt+D` (forward-kill-word), `Shift+Up`/`Shift+Down` (move line), `Alt+Shift+Up`/`Alt+Shift+Down` (duplicate line), `Ctrl+Home`/`Ctrl+End` (buffer start/end).
 - `~/.claude/illo/config.json`: persistent TUI config — theme, filters, display toggles, keybinding overrides. Migrates `tui-prefs.json` on first run. Schema documented in [`docs/config.md`](docs/config.md).
 - CI: `npm audit --audit-level=moderate` runs against `tests/` on every PR (#TBD).

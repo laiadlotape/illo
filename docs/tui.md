@@ -110,6 +110,7 @@ closes it.
 | `PgUp` / `PgDn` | Scroll popup content one screen (while popup is open) |
 | `Ctrl-Up` | Move focus to events log (always — works from compose too) |
 | `Ctrl-Down` | Move focus back to prompt pane (always) |
+| `,` | Open settings panel |
 | `?` | Open full keybindings help overlay |
 | `Ctrl-Q` | Quit |
 
@@ -316,6 +317,38 @@ bash bin/record.sh start   # start
 bash bin/record.sh stop    # stop + auto-gif
 bash bin/record.sh status  # check if recording
 ```
+
+## Settings panel
+
+Press `,` from any focus to open the interactive settings panel. All changes
+are held in a draft until you explicitly save or cancel.
+
+### Sections
+
+| Section | Contents |
+|---|---|
+| **Display** | Toggles for `showSessionAge`, `showProject`, `showBranch`, `showCwd`, `expandSentByDefault` |
+| **Filters** | Cycle `defaultMode` between `low-noise` and `verbose` |
+| **Compose** | Toggle `wrap` (word-wrap in compose buffer) |
+| **Keybindings** | Read-only placeholder — keybinding overrides coming in a future release |
+| **About** | illo version, config file path, homepage URL |
+
+### Keys inside the settings panel
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Move cursor down (wraps to next section) |
+| `k` / `↑` | Move cursor up (wraps to previous section) |
+| `Tab` | Jump to the next section |
+| `Space` / `→` / `←` | Toggle boolean / cycle value for highlighted row |
+| `s` | Save draft to `~/.claude/illo/config.json` and close |
+| `r` | Revert draft to the last saved values |
+| `d` | Reset draft to compiled defaults (press `s` to confirm) |
+| `Esc` / `,` | Cancel and close without saving |
+
+Settings are written to `~/.claude/illo/config.json` — the same file you can
+hand-edit between sessions. Changes take effect immediately in the running TUI
+when saved via `s` (no restart needed for display toggles and filter defaults).
 
 ## Troubleshooting
 

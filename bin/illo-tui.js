@@ -407,6 +407,14 @@ const appState = {
   modal: null,        // { type:'event-detail', eventId } | { type:'message', text }
   eventDetail: null,  // { itemId, scroll } | null
   pasteBuffer: null,  // string | null — accumulates bracketed paste content
+
+  settings: {
+    open: false,
+    section: 0,        // which section is highlighted in the left column
+    cursor: 0,         // which row in the right column
+    awaitingKey: null, // { scope, action } while capturing a new keybind
+    draft: null,       // deep-clone of illoConfig while panel is open
+  },
 };
 
 // ─── compose helpers ──────────────────────────────────────────────────────────
@@ -1248,6 +1256,11 @@ function render() {
     renderHelp(out, rows, cols);
   }
 
+  // ── settings panel ──────────────────────────────────────────────────────
+  if (appState.settings.open) {
+    renderSettings(out, rows, cols);
+  }
+
   process.stdout.write(out.join(''));
 }
 
@@ -1316,6 +1329,7 @@ function renderHelp(out, rows, cols) {
     'Ctrl-Up         Move focus to events log (always)',
     'Ctrl-Down       Move focus to compose (always)',
     '?               Toggle this help overlay',
+    ',               Open settings panel',
     'Esc             Close overlay',
     'Ctrl-Q / Ctrl-C Quit',
   ];
@@ -1342,6 +1356,219 @@ function renderHelp(out, rows, cols) {
 
   out.push(moveTo(startRow + h, startCol)
     + color(C.hint) + ' [?] or [Esc] close' + resetAttrs());
+}
+
+// ─── Settings panel ───────────────────────────────────────────────────────────
+
+const SETTINGS_SECTIONS = ['Display', 'Filters', 'Compose', 'Keybindings', 'About'];
+
+function settingsSectionRows(sectionIdx) {
+  switch (sectionIdx) {
+    case 0: return ['showSessionAge', 'showProject', 'showBranch', 'showCwd', 'expandSentByDefault'];
+    case 1: return ['defaultMode'];
+    case 2: return ['wrap'];
+    case 3: return ['_keybindings_coming_soon'];
+    case 4: return ['_version', '_configFile', '_homepage'];
+    default: return [];
+  }
+}
+
+function applySettingsToggle(draft, section, cursor) {
+  const rows = settingsSectionRows(section);
+  const row = rows[cursor];
+  if (!row || row.startsWith('_')) return;
+  switch (section) {
+    case 0: draft.display[row] = !draft.display[row]; break;
+    case 1:
+      draft.filters.defaultMode =
+        draft.filters.defaultMode === 'low-noise' ? 'verbose' : 'low-noise';
+      break;
+    case 2: draft.compose.wrap = !draft.compose.wrap; break;
+  }
+}
+
+function settingsRowLabel(sectionIdx, rowKey, draft) {
+  const DISPLAY_LABELS = {
+    showSessionAge:       'Show session age · Xm suffix on events',
+    showProject:          'Show project name suffix',
+    showBranch:           'Show git branch suffix',
+    showCwd:              'Show cwd suffix (verbose)',
+    expandSentByDefault:  'Auto-expand sent items',
+  };
+
+  switch (sectionIdx) {
+    case 0: {
+      const val = draft.display[rowKey];
+      const box = val ? '[✓]' : '[ ]';
+      return `${box} ${DISPLAY_LABELS[rowKey] || rowKey}`;
+    }
+    case 1: {
+      const mode = draft.filters.defaultMode;
+      return `< ${mode} >  Default event filter`;
+    }
+    case 2: {
+      const val = draft.compose.wrap;
+      const box = val ? '[✓]' : '[ ]';
+      return `${box} Word-wrap compose buffer`;
+    }
+    case 3:
+      return 'Keybinding overrides — coming in a future release';
+    case 4:
+      if (rowKey === '_version')    return `Version: ${PLUGIN_VERSION}`;
+      if (rowKey === '_configFile') return `Config:  ${ILLO_CONFIG_FILE}`;
+      if (rowKey === '_homepage')   return 'Home:    https://github.com/laiadlotape/illo';
+      return rowKey;
+    default: return rowKey;
+  }
+}
+
+function renderSettings(out, rows, cols) {
+  const s = appState.settings;
+  const draft = s.draft;
+
+  // Overall box: ~70% width × ~70% height, centered
+  const boxW = Math.max(50, Math.min(Math.floor(cols * 0.70), cols - 4));
+  const boxH = Math.max(10, Math.min(Math.floor(rows * 0.70), rows - 4));
+  const startRow = Math.max(2, Math.floor((rows - boxH) / 2));
+  const startCol = Math.max(2, Math.floor((cols - boxW) / 2));
+
+  const LEFT_COL_W = 14; // chars for section name column (not counting borders)
+  const innerW = boxW - 2; // exclude left+right borders
+  const rightColW = innerW - LEFT_COL_W - 1; // -1 for divider
+
+  const titleBar = ' settings ';
+
+  // Top border
+  out.push(moveTo(startRow, startCol) + color(C.amber)
+    + '┌' + titleBar + '─'.repeat(Math.max(0, boxW - 2 - titleBar.length))
+    + '┐' + resetAttrs());
+
+  // Content rows (boxH - 2 rows: exclude top and bottom borders)
+  const contentRows = boxH - 2;
+
+  for (let i = 0; i < contentRows; i++) {
+    const sectionIdx = i; // one section label per row (saturates at last section)
+    const isActiveSect = sectionIdx < SETTINGS_SECTIONS.length && sectionIdx === s.section;
+    const sectionName  = sectionIdx < SETTINGS_SECTIONS.length ? SETTINGS_SECTIONS[sectionIdx] : '';
+
+    // Left column: section names
+    let leftCell;
+    if (sectionIdx < SETTINGS_SECTIONS.length) {
+      const padded = sectionName.padEnd(LEFT_COL_W);
+      if (isActiveSect) {
+        leftCell = bgColor(C.amber) + color(0) + padded + resetAttrs();
+      } else {
+        leftCell = color(C.dim_c) + padded + resetAttrs();
+      }
+    } else {
+      leftCell = ' '.repeat(LEFT_COL_W);
+    }
+
+    // Right column: rows for the active section
+    const sectionRows = settingsSectionRows(s.section);
+    const rowKey = sectionRows[i];
+    let rightCell = '';
+    if (rowKey !== undefined) {
+      const label = settingsRowLabel(s.section, rowKey, draft);
+      const isCursor = i === s.cursor;
+      const isReadOnly = rowKey.startsWith('_') || s.section === 3;
+      const truncLabel = truncate(label, rightColW - 2);
+      if (isCursor && !isReadOnly) {
+        rightCell = bold() + color(C.white) + '> ' + truncLabel + resetAttrs();
+      } else if (isCursor && isReadOnly) {
+        rightCell = color(C.hint) + '> ' + truncLabel + resetAttrs();
+      } else if (isReadOnly) {
+        rightCell = color(C.dim_c) + '  ' + truncLabel + resetAttrs();
+      } else {
+        rightCell = color(C.gray) + '  ' + truncLabel + resetAttrs();
+      }
+    }
+
+    // Pad right cell to fill the right column width
+    const visibleRightLen = rightCell.replace(/\x1b\[[0-9;]*m/g, '').length;
+    const rightPad = ' '.repeat(Math.max(0, rightColW - visibleRightLen));
+
+    out.push(moveTo(startRow + 1 + i, startCol)
+      + color(C.amber) + '│' + resetAttrs()
+      + leftCell
+      + color(C.amber) + '│' + resetAttrs()
+      + rightCell + rightPad
+      + color(C.amber) + '│' + resetAttrs());
+  }
+
+  // Bottom border
+  out.push(moveTo(startRow + boxH - 1, startCol)
+    + color(C.amber) + '└' + '─'.repeat(Math.max(0, boxW - 2)) + '┘' + resetAttrs());
+
+  // Footer
+  const footer = s.awaitingKey
+    ? ' Press any key to set keybind — Esc to cancel'
+    : ' [j/k] move  [Space/←→] toggle  [s] save  [r] revert  [d] defaults  [Esc] cancel';
+  out.push(moveTo(startRow + boxH, startCol)
+    + color(C.hint) + truncate(footer, cols - startCol) + resetAttrs());
+}
+
+function handleSettingsKey(key) {
+  const s = appState.settings;
+
+  // Keybind capture mode
+  if (s.awaitingKey) {
+    if (key === 'esc') { s.awaitingKey = null; scheduleRender(); return; }
+    // future: set s.draft.keybindings[scope][action] = key
+    s.awaitingKey = null;
+    scheduleRender();
+    return;
+  }
+
+  switch (key) {
+    case 'esc':
+    case ',':
+      s.open = false; s.draft = null; scheduleRender(); return;
+    case 'j':
+    case 'down': {
+      const rowCount = settingsSectionRows(s.section).length;
+      if (s.cursor < rowCount - 1) s.cursor++;
+      else if (s.section < SETTINGS_SECTIONS.length - 1) {
+        s.section++; s.cursor = 0;
+      }
+      scheduleRender(); return;
+    }
+    case 'k':
+    case 'up':
+      if (s.cursor > 0) s.cursor--;
+      else if (s.section > 0) {
+        s.section--; s.cursor = settingsSectionRows(s.section).length - 1;
+      }
+      scheduleRender(); return;
+    case 'tab':
+      s.section = (s.section + 1) % SETTINGS_SECTIONS.length;
+      s.cursor = 0;
+      scheduleRender(); return;
+    case 'space':
+    case 'right':
+    case 'left':
+      applySettingsToggle(s.draft, s.section, s.cursor);
+      scheduleRender(); return;
+    case 's':
+      // Save
+      Object.assign(illoConfig, s.draft);
+      saveConfig(illoConfig);
+      s.open = false; s.draft = null;
+      showToast('Settings saved');
+      scheduleRender(); return;
+    case 'r':
+      // Revert to last saved
+      s.draft = JSON.parse(JSON.stringify(illoConfig));
+      s.cursor = 0;
+      showToast('Reverted to saved settings');
+      scheduleRender(); return;
+    case 'd':
+      // Reset to defaults
+      s.draft = JSON.parse(JSON.stringify(CONFIG_DEFAULTS));
+      s.cursor = 0;
+      showToast('Reset to defaults (press s to confirm)');
+      scheduleRender(); return;
+  }
 }
 
 function renderEventDetail(out, rows, cols) {
@@ -1996,6 +2223,12 @@ function parseKey(buf) {
 }
 
 function handleKey(key, port) {
+  // Settings panel: intercepts all keys when open
+  if (appState.settings.open) {
+    handleSettingsKey(key);
+    return;
+  }
+
   // Help overlay: ? toggles, Esc closes
   if (appState.view.helpOpen) {
     if (key === 'esc' || key === '?' || key === 'ctrl-q') {
@@ -2094,6 +2327,16 @@ function handleKey(key, port) {
   // Global help toggle
   if (key === '?') {
     appState.view.helpOpen = true;
+    scheduleRender();
+    return;
+  }
+
+  // Global settings panel
+  if (key === ',') {
+    appState.settings.open = true;
+    appState.settings.section = 0;
+    appState.settings.cursor = 0;
+    appState.settings.draft = JSON.parse(JSON.stringify(illoConfig));
     scheduleRender();
     return;
   }
