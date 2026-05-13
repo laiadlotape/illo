@@ -12,12 +12,15 @@ jobs:
       matrix:
         node-version: ['20.x', '22.x']
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
       - run: node --version
       - run: cd tests && npm ci
+      - name: npm audit (dev dependencies)
+        run: cd tests && npm audit --audit-level=moderate
+        continue-on-error: true
       - run: npm run test:unit
         working-directory: tests
       - run: npm run test:dogfood
@@ -26,7 +29,7 @@ jobs:
         working-directory: tests
       - run: npm run test:integration
         working-directory: tests
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.x'
       - run: npm run test:sdk-python
@@ -35,8 +38,8 @@ jobs:
   ux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '20.x'
       - run: cd tests && npm ci
@@ -44,7 +47,7 @@ jobs:
         working-directory: tests
       - run: npm run test:ux
         working-directory: tests
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure()
         with:
           name: playwright-report
@@ -56,4 +59,4 @@ jobs:
     if: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- CI: `npm audit --audit-level=moderate` runs against `tests/` on every PR (#TBD).
+- `.github/dependabot.yml`: weekly grouped updates for `github-actions` (root) and `npm` (`tests/`).
+
+### Changed
+- All GitHub Actions pinned to commit SHAs (was: mutable major tags). Reduces exposure to the Shai-Hulud / TeamPCP class of supply-chain compromise.
+- `SECURITY.md`: new "Supply chain posture" section documents the zero-runtime-deps contract, SHA-pinned Actions, and Dependabot cadence.
+
+### Removed
+- `daemon/package.json`: empty manifest removed to reinforce the "Node stdlib only" runtime contract. The daemon is launched with `node daemon/server.js`; no script referenced `npm start`.
+
 ### Fixed
 
 - `doc-drift.yml` and `triage.yml`: add `id-token: write` permission so `anthropics/claude-code-action@v1` can fetch its OIDC token. Both workflows were failing on every run with "Could not fetch an OIDC token".
